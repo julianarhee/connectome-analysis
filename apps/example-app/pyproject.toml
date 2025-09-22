@@ -1,0 +1,27 @@
+[project]
+name = "example-app"
+version = "0.1.0"
+description = "Example app using connectome analysis libraries"
+requires-python = ">=3.10"
+dependencies = [
+    "libs",
+]
+
+[tool.uv.sources]
+libs = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
