@@ -195,6 +195,7 @@ print(len(lc10a_aotu_conn_filt))
 #%%
 
 plot_all_lc10a = True
+marker_size = 5
 
 if plot_all_lc10a:
     lc10a_post = synapses[synapses['post_root_id'].isin(all_lc10a_neurons['root_id'].unique())]
@@ -238,7 +239,7 @@ for i, root_id in enumerate(lc10a_post['post_root_id'].unique()[0::3]):
     data_subset = lc10a_post[lc10a_post['post_root_id'] == root_id]
     color = lc10a_cdict[root_id]
     ax.scatter(data_subset[xvar_post], data_subset[yvar_post], data_subset[zvar_post],
-               c=color, s=10, alpha=0.7, label=root_id)
+               c=color, s=marker_size, alpha=0.7, label=root_id)
     if i % 10 == 0:  # Print progress every 10 neurons
         print(f"  Plotted {i+1}/{lc10a_post['post_root_id'].nunique()} neurons")
 
@@ -260,13 +261,14 @@ ax.view_init(elev=180, azim=0, roll=90)  # Set initial viewing angle
 
 print("Showing plot...")
 # Show the interactive plot
-plt.show()
 print("3D plot displayed inline.")
 
 # Save
 figname = 'LC10a_post_3D_huesort-{}_ascending-{}_xvar-{}_yvar-{}'.format(hue_sortby, hue_ascending, xvar, yvar)
 putil.save_fig(figname, fig, figid, figdir)
 print(figname)
+
+plt.show()
 
 #%%
 
@@ -289,13 +291,12 @@ plt.subplots_adjust(hspace=0.8, wspace=0.8)
 
 fig.suptitle(f'Hue: {hue_sortby}, ascending: {hue_ascending}')
 
-plt.show()
-
-
 # Save 
 figname = 'LC10a_post_2D_mutliview_huesort-{}_ascending-{}_xvar-{}_yvar-{}'.format(hue_sortby, hue_ascending, xvar, yvar)
 putil.save_fig(figname, fig, figid, figdir)
 print(figname)
+
+plt.show()
 
 #%%a
 # Just plot 1 hemisphere
@@ -364,15 +365,15 @@ aotu_ids = aotu_neurons['root_id'].unique()
 aotu_post = synapses[(synapses['post_root_id'].isin(aotu_ids)) 
                    & (synapses['pre_root_id'].isin(lc10a_neurons['root_id'].unique()))]
 print(len(aotu_post))
+
 #%%
 aotu_post.loc[aotu_post['post_root_id'] == aotu_names['AOTU019'], 'aotu_type'] = 'AOTU019'
 aotu_post.loc[aotu_post['post_root_id'] == aotu_names['AOTU025'], 'aotu_type'] = 'AOTU025'
 
-
 #%%
 #xvar = 'post_x'
 #yvar = 'post_z'
-fig, axn = plt.subplots(1, 2, figsize=(5, 5), sharex=True, sharey=True)
+fig, axn = plt.subplots(1, 2, figsize=(6, 4), sharex=True, sharey=True)
 ax=axn[0]
 ax.set_title("LC10a->AOTU post-synaptic partners", loc='left')
 sns.scatterplot(data=aotu_post, ax=ax,
@@ -389,12 +390,13 @@ ax.set_aspect('equal')
 sns.move_legend(ax, "lower right", bbox_to_anchor=(1, 1.1), frameon=False)
 ax.invert_yaxis()
 ax.invert_xaxis()
-plt.show()
 
 # Save
-figname = 'LC10a_to_AOTU19_AOTU25'
+figname = 'LC10a_to_AOTU19_AOTU25_position'
 putil.save_fig(figname, fig, figid, figdir)
 print(figname)
+
+plt.show()
 
 # %%
 tutu_lc10a_syn = synapses[synapses['pre_root_id'].isin(tutu_all['root_id'].unique()) & 
@@ -413,7 +415,7 @@ tutu_cdict = dict(zip(tutu_ids, tutu_colors))
 xvar = 'post_x'
 yvar = 'post_y'
 # Plot TuTu
-fig, axn = plt.subplots(1, 2, figsize=(10, 10), sharex=True, sharey=True)
+fig, axn = plt.subplots(1, 2, figsize=(6, 4), sharex=True, sharey=True)
 ax=axn[0]
 ax.set_title("TuTu -> LC10a", loc='left')
 sns.scatterplot(data=tutu_lc10a_syn, ax=ax,
@@ -421,6 +423,8 @@ sns.scatterplot(data=tutu_lc10a_syn, ax=ax,
                 hue='pre_root_id', 
                 palette=tutu_cdict)
 ax.set_aspect('equal')
+sns.move_legend(ax, "lower right", bbox_to_anchor=(1, 1.1), frameon=False)
+
 ax=axn[1]
 ax.set_title('Colored by LC10a position', loc='left')
 sns.scatterplot(data=tutu_lc10a_syn, ax=ax,
@@ -430,12 +434,13 @@ sns.scatterplot(data=tutu_lc10a_syn, ax=ax,
 ax.set_aspect('equal')
 ax.invert_yaxis()
 ax.invert_xaxis()
-plt.show()
 
 # Save
-figname = 'TuTu_to_LC10a'
+figname = 'TuTu_to_LC10a_position_TuTu-type'
 putil.save_fig(figname, fig, figid, figdir)
 print(figname)
+
+plt.show()
 
 #%%
 #xvar = 'pre_x'
@@ -466,7 +471,7 @@ ax.invert_xaxis()
 fig.suptitle('All TuTu -> LC10a', fontsize=10)
 
 # figname
-figname = 'TuTu_to_LC10a_all_by_type'
+figname = 'TuTu_to_LC10a_all_split-TuTu-type'
 putil.save_fig(figname, fig, figid, figdir)
 print(figname)
 
@@ -505,9 +510,11 @@ ax.invert_yaxis()
 ax.set_aspect('equal')
 
 # Svae
-figname = 'TuTu_to_LC10a_AOTU019_AOTU025'
+figname = 'tutu_lc10a_syn_by_position'
 putil.save_fig(figname, fig, figid, figdir)
 print(figname)
+
+plt.show()
 
 
 # %%
@@ -567,11 +574,9 @@ yvar_post = 'post_y'
 plot_aggr = True 
 
 if plot_aggr:
-    plotd = tutu_lc10a_aotu_syn_aggr.copy()
+    plotd = tutu_lc10a_aotu_syn_aggr.copy() 
 else:
     plotd = tutu_lc10a_syn.copy()
-
-
 
 # Normalize size of synapse counts
 size_min = plotd['syn_count_post_aggr'].min()
@@ -595,7 +600,7 @@ plotd['norm_size'] = plotd['syn_count_post_aggr'].apply(
 )
 
 # Normalize size of synapse counts
-fig, axn = plt.subplots(1, 3, figsize=(10, 10), sharex=True, sharey=True)
+fig, axn = plt.subplots(1, 3, figsize=(6, 4), sharex=True, sharey=True)
 ax=axn[0]
 ax.set_title("TuTu->LC10a->AOTU19 (colored by LC10a pos)", loc='left')
 sns.scatterplot(data=plotd, ax=ax,
@@ -622,7 +627,14 @@ sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1.1), frameon=False)
 ax.set_aspect('equal')
 ax.invert_yaxis()
 ax.invert_xaxis()
+
+# Save
+figname = 'tutu_lc10a_syn_by_syncount'
+putil.save_fig(figname, fig, figid, figdir)
+print(figname)
+
 plt.show()
+
 
 # %%
 
@@ -674,7 +686,7 @@ tutu_lc10a_syn['norm_size'] = tutu_lc10a_syn[size_var_orig].apply(
 
 sizes = size_range if size_var=='norm_size' else None
 
-alpha=0.8
+alpha=1
 edgecolor = 'none'
 min_syn_count = 10
 plot_x = 'post_z'
@@ -727,7 +739,15 @@ ax.set_aspect('equal')
 ax.invert_yaxis()
 ax.invert_xaxis()
 
+
+# Save
+figname = 'syn_count_TuTu_to_LC10a'
+putil.save_fig(figname, fig, figid, figdir)
+print(figname)
+
 plt.show()
+
+#%%
 
 
 #%%
@@ -779,6 +799,12 @@ for ai, curr_aotu in enumerate(['AOTU019', 'AOTU025']):
 ax.invert_yaxis()
 ax.invert_xaxis()
 
+
+# save
+figname = 'tutu_lc10a_syn_split-AOTU'
+putil.save_fig(figname, fig, figid, figdir)
+print(figname)
+
 #%%
 alpha=1
 
@@ -788,7 +814,7 @@ edgecolor='none'
 
 fig, axn = plt.subplots(2, n_tutu_types, figsize=(10, 5), sharex=True, sharey=True)
 ax=axn[0, 0]
-ax.set_title('TuTu->LC10a->AOTU 19/25 (color by pos)', loc='left')
+ax.set_title('TuTu->LC10a (color by pos)', loc='left')
 sns.scatterplot(data=tutu_lc10a_syn, ax=ax,
                 x=plot_x, y=plot_y, #z='z_pre', 
                 hue='post_root_id', size=size_var, sizes=sizes, #size='norm_size', sizes=size_range,
@@ -813,6 +839,12 @@ ax.legend(loc='upper left', bbox_to_anchor=(1, 1.1), frameon=False)
 
 ax.invert_yaxis()
 ax.invert_xaxis()
+
+# Save
+figname = 'tutu_lc10a_syn_syncount_split-TuTu-type'
+putil.save_fig(figname, fig, figid, figdir)
+print(figname)
+
 #%%
 alpha=0.2
 
@@ -822,17 +854,26 @@ plotd = tutu_lc10a_syn[tutu_lc10a_syn['syn_count']>min_syn_count].copy()
 plotd.loc[plotd['aotu_type'].isna(), 'aotu_type'] = 'none'
 
 # Plot TuTuA->LC10a color coded by syn_count in 3D
-fig = plt.figure(figsize=(10, 5))
+fig = plt.figure(figsize=(10, 4))
+fig.suptitle('TuTu->LC10a->AOTU 19/25', ha='center', va='center')
 
-ax = fig.add_subplot(121, projection='3d')
-ax2 = fig.add_subplot(122, projection='3d', sharex=ax, sharey=ax, sharez=ax)
+ax = fig.add_subplot(131, projection='3d')
+ax2 = fig.add_subplot(132, projection='3d', sharex=ax, sharey=ax, sharez=ax)
 
-ax.scatter(plotd['post_x'], plotd['post_y'], plotd['post_z'], 
-           c=plotd['syn_count'], cmap='viridis', alpha=alpha)#,
-           #s=plotd['norm_size'])
-ax.set_title('TuTu->LC10a->AOTU 19/25 (color by syn_count)', 
-             loc='left')
-# Create colorbar for ax
+scatter = ax.scatter(plotd['post_x'], plotd['post_y'], plotd['post_z'], 
+                     c=plotd['syn_count'], cmap='viridis', alpha=alpha)
+
+# Create colorbar for ax with full opacity without changing subplot size
+from matplotlib.colors import Normalize
+import matplotlib.cm as cm
+norm = Normalize(vmin=plotd['syn_count'].min(), vmax=plotd['syn_count'].max())
+sm = cm.ScalarMappable(norm=norm, cmap='viridis')
+sm.set_array([])
+
+# Create colorbar with specific axis position
+cbar_ax = fig.add_axes([0.32, 0.3, 0.01, 0.4])  # [left, bottom, width, height]
+cbar = fig.colorbar(sm, cax=cbar_ax, orientation='vertical')
+cbar.set_label('Synapse Count', fontsize=10)
 
 
 ax2.scatter(plotd['post_x'], plotd['post_y'], plotd['post_z'], 
@@ -842,14 +883,23 @@ ax2.scatter(plotd['post_x'], plotd['post_y'], plotd['post_z'],
 legh = putil.custom_legend(labels=['AOTU019', 'AOTU025'],
                            colors=[aotu_cdict['AOTU019'], aotu_cdict['AOTU025']],
                            use_line=False, markersize=10)
-ax2.legend(handles=legh, labels=['AOTU019', 'AOTU025'], frameon=False)
+ax2.legend(handles=legh, labels=['AOTU019', 'AOTU025'], 
+           frameon=False, loc='upper left', bbox_to_anchor=(0.9, 1))
 
 ax.set_xlabel('post_x')
 ax.set_ylabel('post_y')
 ax.set_zlabel('post_z')
 
+# Format tick labels to be shorter (e.g., 670000 -> 6.7)
+# Apply formatting to all axes
+for ax_plot in [ax, ax2]:
+    ax_plot.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/100000:.1f}'))
+    ax_plot.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/100000:.1f}'))
+    ax_plot.zaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/100000:.1f}'))
+
 # invert axes
 ax.invert_zaxis()
+
 
 # Set view
 elev = 10
@@ -858,6 +908,63 @@ roll = -90
 ax.view_init(elev=elev, azim=azim, roll=roll)  # Set initial viewing angle
 ax2.view_init(elev=elev, azim=azim, roll=roll)  # Set initial viewing angle
 
+plt.subplots_adjust(top=0.9)
+
+# Save
+figname = 'all_TuTu_to_LC10a_to_AOTU_3D'
+putil.save_fig(figname, fig, figid, figdir)
+print(figname)
+
 plt.show()
 
 #%%
+
+alpha=0.9
+edgecolor = 'none'
+min_syn_count = 10
+plot_x = 'post_z'
+plot_y = 'post_y'
+size_var = 'norm_size'
+
+hue_min = tutu_lc10a_syn['syn_count'].min()
+hue_max = tutu_lc10a_syn['syn_count'].max()
+hue_norm = Normalize(vmin=plotd['syn_count'].min(), vmax=plotd['syn_count'].max())
+
+marker_size = 20
+
+fig, axn = plt.subplots(1, 2, figsize=(8, 4), 
+                        sharex=True, sharey=True)
+ax=axn[0]
+ax.set_title('all TuTu->LC10a', loc='left')
+sns.scatterplot(data=tutu_lc10a_syn[tutu_lc10a_syn['syn_count']>min_syn_count], ax=ax,
+                x=plot_x, y=plot_y, #z='z_pre', 
+                hue='syn_count', hue_norm=hue_norm, s=marker_size,
+                #size=size_var, sizes=sizes, #size='norm_size', sizes=size_range,
+                palette='viridis', alpha=alpha, legend=0,
+                edgecolor=edgecolor)
+ax.set_aspect('equal')
+# create colorbar
+sm = cm.ScalarMappable(norm=hue_norm, cmap='viridis')
+cbar_ax = fig.add_axes([0.45, 0.3, 0.01, 0.4])  # [left, bottom, width, height]
+cbar = fig.colorbar(sm, cax=cbar_ax, orientation='vertical')
+cbar.set_label('Synapse Count', fontsize=10)
+
+ax=axn[1]
+ax.set_title('LC10a->AOTU 19/25', loc='left')
+sns.scatterplot(data=lc10a_aotu_syn[lc10a_aotu_syn['syn_count']>min_syn_count], ax=ax,
+                x=plot_x, y=plot_y, #z='z_pre', 
+                hue='aotu_type', s=marker_size, #size=size_var, sizes=sizes, #size='norm_size', sizes=size_range,
+                alpha=0.9, #edgecolor=edgecolor,
+                palette=aotu_cdict)
+sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1.1), frameon=False)
+
+ax.set_aspect('equal')
+ax.invert_yaxis()
+ax.invert_xaxis()
+
+plt.subplots_adjust(wspace=0.5)
+
+# Save
+figname = 'tutu_lc10a_syn_count_match_AOTU19-25_no-size'
+putil.save_fig(figname, fig, figid, figdir)
+
