@@ -1,1 +1,11 @@
 LC10-connections.ipynb filter=lfs diff=lfs merge=lfs -text
+data/flywire/classification.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/connections_princeton.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/consolidated_cell_types.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/fafb_synapses.parquet filter=lfs diff=lfs merge=lfs -text
+data/flywire/fafb_v783_princeton_synapse_table.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/synapse_coordinates.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/visual_neuron_types.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/connections_princeton_no_threshold.csv.gz filter=lfs diff=lfs merge=lfs -text
+data/flywire/fafb_synapses.pkl filter=lfs diff=lfs merge=lfs -text
+data/flywire/fafb_v783_princeton_synapse_table.csv filter=lfs diff=lfs merge=lfs -text
