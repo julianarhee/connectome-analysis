@@ -22,10 +22,14 @@ import matplotlib.pyplot as plt
 # ----------------------------------------------------------------------
 # Visualization 
 # ----------------------------------------------------------------------
-def save_fig(figname, fig, figid, figdir):
+def save_fig(figname, fig, figid, figdir, save_svg=False):
     label_figure(fig, figid)
     fig_fpath = os.path.join(figdir, '{}.png'.format(figname))
     plt.savefig(fig_fpath)
+    if save_svg:
+        fig_fpath = os.path.join(figdir, '{}.svg'.format(figname))
+        plt.savefig(fig_fpath)
+    #plt.close(fig)
 
 def label_figure(fig, fig_id, x=0.01, y=0.98, fontsize=8):
     fig.text(x, y, fig_id, fontsize=fontsize)

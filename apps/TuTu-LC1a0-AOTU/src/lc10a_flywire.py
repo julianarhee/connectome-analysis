@@ -176,21 +176,70 @@ def find_connection_strengths(pre_root_ids, post_root_ids):
     return connections_from_pre
 
 # %%
-# tutu to LC10a
+# TuTu to LC10a
+# ========================================================
 min_syn_count = 5
 tutu_lc10a_conn = find_connections(tutu_all['root_id'].unique(), 
                                    lc10a_neurons['root_id'].unique())
 tutu_lc10a_conn_filt = tutu_lc10a_conn[tutu_lc10a_conn['syn_count']>min_syn_count]
 tutu_lc10a_conn_filt.loc[tutu_lc10a_conn_filt['pre_root_id'].isin(tutu_right), 'side'] = 'right'
 tutu_lc10a_conn_filt.loc[tutu_lc10a_conn_filt['pre_root_id'].isin(tutu_left), 'side'] = 'left'
+print("TuTu->LC10a: ", len(tutu_lc10a_conn_filt))
 
-print(len(tutu_lc10a_conn_filt))
+# Get TuTu->LC10a synapses
+tutu_lc10a_syn = synapses[synapses['pre_root_id'].isin(tutu_all['root_id'].unique()) & 
+                          synapses['post_root_id'].isin(lc10a_neurons['root_id'].unique())]
+print(len(tutu_lc10a_syn))
 
+#%%k
 # LC10a to AOTU
+# =======================================================
 lc10a_aotu_conn = find_connections(lc10a_neurons['root_id'].unique(), 
                                     aotu_neurons['root_id'].unique())
 lc10a_aotu_conn_filt = lc10a_aotu_conn[lc10a_aotu_conn['syn_count']>min_syn_count]
-print(len(lc10a_aotu_conn_filt))
+print("LC10a->AOTU: ", len(lc10a_aotu_conn_filt))
+
+# Get LC10a->AOTU synapses (aotu_post is the same as this)
+lc10a_aotu_syn = synapses[synapses['pre_root_id'].isin(lc10a_neurons['root_id'].unique()) & 
+                          synapses['post_root_id'].isin(aotu_neurons['root_id'].unique())]
+print(len(lc10a_aotu_syn))
+
+
+#%%
+# Get LC10a back to TuTuA
+# =======================================================
+lc10a_tutu_conn = find_connections(lc10a_neurons['root_id'].unique(), 
+                                    tutu_all['root_id'].unique())
+lc10a_tutu_conn_filt = lc10a_tutu_conn[lc10a_tutu_conn['syn_count']>min_syn_count]
+print("LC10a->TuTu: ", len(lc10a_tutu_conn_filt))
+
+# Get LC10a->TuTu synapses
+lc10a_tutu_syn = synapses[synapses['pre_root_id'].isin(lc10a_neurons['root_id'].unique()) & 
+                          synapses['post_root_id'].isin(tutu_all['root_id'].unique())]
+print(len(lc10a_tutu_syn))
+
+#%%
+# Add aotu_name, aotu_type, and aotu_side to lc10a_aotu_syn
+# =======================================================
+for aotu_id, aotu_name in aotu_id_to_name.items(): 
+    lc10a_aotu_syn.loc[lc10a_aotu_syn['post_root_id'] == aotu_id, 'aotu_name'] = aotu_name
+    lc10a_aotu_syn.loc[lc10a_aotu_syn['post_root_id'] == aotu_id, 'aotu_type'] = aotu_name.split('_')[0]
+    lc10a_aotu_syn.loc[lc10a_aotu_syn['post_root_id'] == aotu_id, 'aotu_side'] = aotu_name.split('_')[1]
+
+# Assign AOTU path to upstream neurons
+
+
+#%%
+
+# Plot TuTu->LC10a on 1 plot, LC10a->TuTu on another plot
+fig, axn = plt.subplots(1, 2, figsize=(10, 5))
+ax=axn[0]
+sns.scatterplot(data=tutu_lc10a_conn_filt, ax=ax,
+                x='pre_x', y='pre_y', 
+                hue='pre_root_id', 
+                palette=tutu_cdict)
+ax=axn[1]
+
 
 #%%
 
@@ -320,7 +369,7 @@ elif hue_sortby == 'pre_y':
     xvar = 'post_x'
     yvar = 'post_y'
 
-# Sort LC10a_post by post_y
+# Sort LC10a_post by post
 lc10a_post_sorted_ids = lc10a_post.sort_values(
                             by=hue_sortby, 
                             ascending=hue_ascending)['post_root_id'].unique()
@@ -360,29 +409,19 @@ aotu_cdict = {'AOTU025': aotu_colors[-1],
 #aotu_name_types = {v: k for k, v in aotu_names.items()}
 #aotu_name_types
 
-# %%
-aotu_ids = aotu_neurons['root_id'].unique()
-aotu_post = synapses[(synapses['post_root_id'].isin(aotu_ids)) 
-                   & (synapses['pre_root_id'].isin(lc10a_neurons['root_id'].unique()))]
-print(len(aotu_post))
-
-#%%
-aotu_post.loc[aotu_post['post_root_id'] == aotu_names['AOTU019'], 'aotu_type'] = 'AOTU019'
-aotu_post.loc[aotu_post['post_root_id'] == aotu_names['AOTU025'], 'aotu_type'] = 'AOTU025'
-
 #%%
 #xvar = 'post_x'
 #yvar = 'post_z'
 fig, axn = plt.subplots(1, 2, figsize=(6, 4), sharex=True, sharey=True)
 ax=axn[0]
 ax.set_title("LC10a->AOTU post-synaptic partners", loc='left')
-sns.scatterplot(data=aotu_post, ax=ax,
+sns.scatterplot(data=lc10a_aotu_syn, ax=ax,
                 x=xvar, y=yvar, #z='z_pre', 
                 hue='pre_root_id', s=10,
                 palette=lc10a_cdict, legend=0)
 ax.set_aspect('equal')
 ax=axn[1]
-sns.scatterplot(data=aotu_post, ax=ax,
+sns.scatterplot(data=lc10a_aotu_syn, ax=ax,
                 x=xvar, y=yvar, #z='z_pre', 
                 hue='aotu_type', s=10,
                 palette=aotu_cdict, legend=1)
@@ -398,14 +437,6 @@ print(figname)
 
 plt.show()
 
-# %%
-tutu_lc10a_syn = synapses[synapses['pre_root_id'].isin(tutu_all['root_id'].unique()) & 
-                          synapses['post_root_id'].isin(lc10a_neurons['root_id'].unique())]
-print(len(tutu_lc10a_syn))
-
-lc10a_aotu_syn = synapses[synapses['pre_root_id'].isin(lc10a_neurons['root_id'].unique()) & 
-                          synapses['post_root_id'].isin(aotu_neurons['root_id'].unique())]
-print(len(lc10a_aotu_syn))
 
 # %%
 tutu_ids = tutu_lc10a_syn['pre_root_id'].unique()
