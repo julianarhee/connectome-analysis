@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["libs", "apps/*"]
+members = ["libs", "apps/example-app"]
 
 [dependency-groups]
 dev = [

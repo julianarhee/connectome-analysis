@@ -23,8 +23,6 @@ resolution-markers = [
 members = [
     "example-app",
     "libs",
-    "neu-binocular-to-lc10a",
-    "tutu-lc1a0-aotu",
 ]
 
 [manifest.dependency-groups]
@@ -2661,17 +2659,6 @@ wheels = [
 ]
 
 [[package]]
-name = "neu-binocular-to-lc10a"
-version = "0.1.0"
-source = { virtual = "apps/neu-binocular-to-LC10a" }
-dependencies = [
-    { name = "libs" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "libs", editable = "libs" }]
-
-[[package]]
 name = "neuprint-python"
 version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4653,17 +4640,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/d2/91/915e5affdfcc06ef4
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ea/70/d4376ceb7fe7ab8f9bf70b4f24f5bb7d436f51dc50cf21432401bc8233b2/trimesh-4.8.2-py3-none-any.whl", hash = "sha256:666f93c143576d0cbe6e1f6a44bde1d864367f274e9ae3917cabd363394a58a1", size = 729114, upload-time = "2025-09-17T21:44:19.3Z" },
 ]
-
-[[package]]
-name = "tutu-lc1a0-aotu"
-version = "0.1.0"
-source = { virtual = "apps/TuTu-LC1a0-AOTU" }
-dependencies = [
-    { name = "libs" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "libs", editable = "libs" }]
 
 [[package]]
 name = "types-python-dateutil"
