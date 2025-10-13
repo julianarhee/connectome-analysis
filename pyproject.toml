@@ -8,4 +8,5 @@ dev = [
     "ipykernel>=6.30.1",
     "jupyter>=1.1.1",
     "navis>=1.10.0",
+    "neuprint-python>=0.4.0",
 ]
