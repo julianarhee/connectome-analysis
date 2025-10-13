@@ -14,13 +14,14 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
-from scipy.spatial.distance import pdist, squareform
 
 from neuprint import Client
 import neuprint as neu
 from neuprint import NeuronCriteria as NC
 from neuprint.utils import connection_table_to_matrix
+
+import neuprint_funcs as npfuncs
+
 # %%
 # Load token from shell (IDE doesn't inherit .zshrc env vars)
 import subprocess
@@ -39,195 +40,6 @@ c = Client('neuprint.janelia.org', dataset='male-cns:v0.9', token=token)
 c.fetch_version()
 
 # %%
-# =============== UTILITY FUNCTIONS ===============
-
-def fetch_neuron_types(client, neuron_types):
-    """Fetch neurons for one or more cell types and return combined dataframe."""
-    if isinstance(neuron_types, str):
-        neuron_types = [neuron_types]
-    
-    dfs, roi_dfs = [], []
-    for ntype in neuron_types:
-        df, roi_df = neu.fetch_neurons(NC(type=ntype, client=client))
-        dfs.append(df)
-        roi_dfs.append(roi_df)
-        print(f"  {ntype}: {len(df)} neurons")
-    
-    combined_df = pd.concat(dfs, ignore_index=True)
-    return combined_df, pd.concat(roi_dfs, ignore_index=True), combined_df['bodyId'].unique()
-
-
-def split_ids_by_side(df):
-    """Split neuron bodyIds by L/R hemisphere."""
-    return (df[df['somaSide'] == 'L']['bodyId'].unique(),
-            df[df['somaSide'] == 'R']['bodyId'].unique())
-
-
-def split_ids_by_side_from_matrix(conn_matrix, src_df, target_df):
-    """Split neuron bodyIds by L/R hemisphere using the sorted matrix order."""
-    # Get all source and target IDs in matrix order
-    src_ids = conn_matrix.index.tolist()
-    tgt_ids = conn_matrix.columns.tolist()
-    
-    # Create mappings for quick lookup
-    src_side_map = dict(zip(src_df['bodyId'], src_df['somaSide']))
-    tgt_side_map = dict(zip(target_df['bodyId'], target_df['somaSide']))
-    
-    # Split source IDs by side
-    src_L = [id for id in src_ids if src_side_map.get(id) == 'L']
-    src_R = [id for id in src_ids if src_side_map.get(id) == 'R']
-    
-    # Split target IDs by side  
-    tgt_L = [id for id in tgt_ids if tgt_side_map.get(id) == 'L']
-    tgt_R = [id for id in tgt_ids if tgt_side_map.get(id) == 'R']
-    
-    return src_L, src_R, tgt_L, tgt_R
-
-
-def get_connectivity_matrix(src_ids, target_ids, src_df, target_df):
-    """Fetch connectivity and return matrix grouped by L/R hemisphere."""
-    print(f"Fetching connectivity: {len(src_ids)} → {len(target_ids)} neurons...")
-    
-    # Fetch connectivity
-    neuron_df, conn_df = neu.fetch_adjacencies(src_ids, target_ids)
-
-    # Merge properties
-    conn_df = neu.merge_neuron_properties(neuron_df, conn_df, ['type', 'instance'])
-      
-    # Convert to matrix using neuprint utility with sorting by instance (L/R)
-    conn_matrix = connection_table_to_matrix(conn_df, 'bodyId', sort_by='instance')
-    
-    # Split by hemisphere using the sorted matrix order
-    src_L, src_R, tgt_L, tgt_R = split_ids_by_side_from_matrix(conn_matrix, src_df, target_df)
-    
-    return conn_matrix, src_L, src_R, tgt_L, tgt_R
-
-
-def get_two_hop_connectivity_matrix(src_ids, intermediate_ids, target_ids,
-                                    src_df, intermediate_df, target_df,
-                                    weight_method='min'):
-    """
-    Compute two-hop connectivity: src → intermediate → target.
-    
-    Parameters:
-    -----------
-    weight_method : str
-        How to combine weights: 'min', 'product', 'second_hop', or 'count'
-    """
-    print(f"Computing two-hop: {len(src_ids)} → {len(intermediate_ids)} → {len(target_ids)}...")
-    
-    # Fetch both hops
-    _, conn1 = neu.fetch_adjacencies(src_ids, intermediate_ids)  # src → intermediate
-    _, conn2 = neu.fetch_adjacencies(intermediate_ids, target_ids)  # intermediate → target
-    
-    # Join on intermediate neurons (post from hop1 = pre from hop2)
-    two_hop = conn1.merge(conn2, left_on='bodyId_post', right_on='bodyId_pre',
-                          suffixes=('_hop1', '_hop2'))
-    
-    # Combine weights based on method
-    if weight_method == 'min':
-        two_hop['weight'] = two_hop[['weight_hop1', 'weight_hop2']].min(axis=1)
-    elif weight_method == 'product':
-        two_hop['weight'] = two_hop['weight_hop1'] * two_hop['weight_hop2']
-    elif weight_method == 'second_hop':
-        two_hop['weight'] = two_hop['weight_hop2']
-    elif weight_method == 'count':
-        two_hop['weight'] = 1
-    
-    # Aggregate by source and final target
-    conn_agg = (two_hop.groupby(['bodyId_pre_hop1', 'bodyId_post_hop2'], as_index=False)['weight']
-                .sum()
-                .rename(columns={'bodyId_pre_hop1': 'bodyId_pre', 'bodyId_post_hop2': 'bodyId_post'}))
-    
-    print(f"  Found {len(conn_agg)} two-hop connections")
-    
-    # Add instance columns for sorting (merge from original dataframes)
-    src_instance_map = dict(zip(src_df['bodyId'], src_df['instance']))
-    tgt_instance_map = dict(zip(target_df['bodyId'], target_df['instance']))
-    
-    conn_agg['instance_pre'] = conn_agg['bodyId_pre'].map(src_instance_map)
-    conn_agg['instance_post'] = conn_agg['bodyId_post'].map(tgt_instance_map)
-    
-    # Convert to matrix using neuprint utility with sorting by instance (L/R)
-    conn_matrix = connection_table_to_matrix(conn_agg, 'bodyId', sort_by='instance')
-    
-    # Split by hemisphere using the sorted matrix order
-    src_L, src_R, tgt_L, tgt_R = split_ids_by_side_from_matrix(conn_matrix, src_df, target_df)
-    
-    return conn_matrix, src_L, src_R, tgt_L, tgt_R
-
-
-def cluster_connectivity_matrix(conn_matrix, method='cosine', linkage_method='average', min_connections=1):
-    """
-    Cluster rows and columns of connectivity matrix by similarity.
-    
-    Parameters:
-    -----------
-    conn_matrix : pd.DataFrame
-        Connection matrix to cluster
-    method : str
-        Distance metric: 'cosine', 'correlation', 'euclidean'
-    linkage_method : str
-        Linkage method: 'average', 'ward', 'complete', 'single'
-    min_connections : int
-        Minimum total connections to include neuron in clustering
-    
-    Returns:
-    --------
-    clustered_matrix : pd.DataFrame
-        Reordered matrix
-    row_linkage : ndarray
-        Hierarchical clustering linkage for rows
-    col_linkage : ndarray
-        Hierarchical clustering linkage for columns
-    """
-    # Filter out neurons with too few connections
-    row_sums = conn_matrix.sum(axis=1)
-    col_sums = conn_matrix.sum(axis=0)
-    
-    valid_rows = row_sums >= min_connections
-    valid_cols = col_sums >= min_connections
-    
-    filtered_matrix = conn_matrix.loc[valid_rows, valid_cols]
-    
-    if len(filtered_matrix) == 0:
-        print("Warning: No neurons pass the minimum connection threshold!")
-        return conn_matrix, None, None
-    
-    print(f"Clustering {valid_rows.sum()}/{len(conn_matrix)} sources, {valid_cols.sum()}/{len(conn_matrix.columns)} targets")
-    
-    # Compute distance and cluster
-    def safe_pdist(data, metric):
-        """Compute pdist and handle NaN/Inf values."""
-        dist = pdist(data, metric=metric)
-        # Replace any NaN or Inf with max distance
-        if not np.all(np.isfinite(dist)):
-            max_dist = np.nanmax(dist[np.isfinite(dist)]) if np.any(np.isfinite(dist)) else 1.0
-            dist = np.nan_to_num(dist, nan=max_dist, posinf=max_dist, neginf=0)
-        return dist
-    
-    if method == 'cosine':
-        row_dist = safe_pdist(filtered_matrix.values, metric='cosine')
-        col_dist = safe_pdist(filtered_matrix.T.values, metric='cosine')
-    elif method == 'correlation':
-        row_dist = safe_pdist(filtered_matrix.values, metric='correlation')
-        col_dist = safe_pdist(filtered_matrix.T.values, metric='correlation')
-    else:
-        row_dist = safe_pdist(filtered_matrix.values, metric=method)
-        col_dist = safe_pdist(filtered_matrix.T.values, metric=method)
-    
-    row_linkage = linkage(row_dist, method=linkage_method)
-    col_linkage = linkage(col_dist, method=linkage_method)
-    
-    # Get reordered indices
-    row_order = leaves_list(row_linkage)
-    col_order = leaves_list(col_linkage)
-    
-    # Reorder matrix
-    clustered_matrix = filtered_matrix.iloc[row_order, col_order]
-    
-    return clustered_matrix, row_linkage, col_linkage
-
 
 def plot_connectivity_matrix(conn_matrix, src_df, target_df,
                              src_L, src_R, tgt_L, tgt_R,
@@ -238,10 +50,10 @@ def plot_connectivity_matrix(conn_matrix, src_df, target_df,
     # Cluster if requested
     if cluster:
         print("Clustering matrix by cosine similarity...")
-        conn_matrix, _, _ = cluster_connectivity_matrix(conn_matrix)
+        conn_matrix, _, _ = npfuncs.cluster_connectivity_matrix(conn_matrix)
         # Update L/R counts after filtering (clustering removes neurons with <1 connections)
-        src_L, src_R = split_ids_by_side(src_df)
-        tgt_L, tgt_R = split_ids_by_side(target_df)
+        src_L, src_R = npfuncs.split_ids_by_side(src_df)
+        tgt_L, tgt_R = npfuncs.split_ids_by_side(target_df)
         # Filter to only include neurons that remain in clustered matrix
         src_L = [id for id in src_L if id in conn_matrix.index]
         src_R = [id for id in src_R if id in conn_matrix.index]
@@ -302,18 +114,18 @@ def plot_connectivity_matrix(conn_matrix, src_df, target_df,
 # =============== FETCH NEURONS ===============
 
 print("Fetching LC10a neurons...")
-LC10a_df, LC10a_roi_df, LC10a_ids = fetch_neuron_types(c, 'LC10a')
+LC10a_df, LC10a_roi_df, LC10a_ids = npfuncs.fetch_neuron_types(c, 'LC10a')
 
 print("\nFetching LC14a neurons...")
-LC14_df, LC14_roi_df, LC14_ids = fetch_neuron_types(c, 'LC14a-1')
+LC14_df, LC14_roi_df, LC14_ids = npfuncs.fetch_neuron_types(c, 'LC14a-1')
 
 print("\nFetching AOTU neurons...")
-AOTU_df, AOTU_roi_df, AOTU_ids = fetch_neuron_types(c, ['AOTU019', 'AOTU025'])
+AOTU_df, AOTU_roi_df, AOTU_ids = npfuncs.fetch_neuron_types(c, ['AOTU019', 'AOTU025'])
 
 # %%
 # =============== PLOT LC10a → AOTU CONNECTIVITY ===============
 
-conn_matrix, src_L, src_R, tgt_L, tgt_R = get_connectivity_matrix(
+conn_matrix, src_L, src_R, tgt_L, tgt_R = npfuncs.get_connectivity_matrix(
     LC10a_ids, AOTU_ids, LC10a_df, AOTU_df
 )
 #%%
@@ -327,7 +139,7 @@ plt.show()
 # %%
 # =============== PLOT LC14 → LC10a CONNECTIVITY ===============
 
-conn_matrix_LC14, src_L, src_R, tgt_L, tgt_R = get_connectivity_matrix(
+conn_matrix_LC14, src_L, src_R, tgt_L, tgt_R = npfuncs.get_connectivity_matrix(
     LC14_ids, LC10a_ids, LC14_df, LC10a_df
 )
 
@@ -342,7 +154,7 @@ plt.show()
 # =============== PLOT LC14 → LC10a → AOTU CONNECTIVITY (TWO-HOP) ===============
 # LC14 → AOTU is not a direct connection, mediated by LC10a neurons
 
-conn_matrix_2hop, src_L, src_R, tgt_L, tgt_R = get_two_hop_connectivity_matrix(
+conn_matrix_2hop, src_L, src_R, tgt_L, tgt_R = npfuncs.get_two_hop_connectivity_matrix(
     LC14_ids, LC10a_ids, AOTU_ids,
     LC14_df, LC10a_df, AOTU_df,
     weight_method='min'  # Options: 'min', 'product', 'second_hop', 'count'
@@ -371,7 +183,7 @@ plt.show()
 # Visualize clustering hierarchy with better formatting
 
 # Cluster the matrix
-clustered_matrix, row_linkage, col_linkage = cluster_connectivity_matrix(conn_matrix)
+clustered_matrix, row_linkage, col_linkage = npfuncs.cluster_connectivity_matrix(conn_matrix)
 
 # Plot dendrograms with better visualization
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
@@ -429,9 +241,9 @@ for (src, tgt), weight in top_connections.items():
 
 #%%
 # Get connections from AOTU to DNa02
-DNa02_df, DNa02_roi_df, DNa02_ids = fetch_neuron_types(c, 'DNa02')
+DNa02_df, DNa02_roi_df, DNa02_ids = npfuncs.fetch_neuron_types(c, 'DNa02')
 
-conn_matrix_DNa02, src_L, src_R, tgt_L, tgt_R = get_connectivity_matrix(
+conn_matrix_DNa02, src_L, src_R, tgt_L, tgt_R = npfuncs.get_connectivity_matrix(
     AOTU_ids, DNa02_ids, AOTU_df, DNa02_df
 )
 
