@@ -10,12 +10,6 @@ import os
 import numpy as np
 import pandas as pd
 
-
-from neuprint import Client
-def set_default_clien():
-    c = Client('neuprint.janelia.org',dataset='hemibrain:v1.2.1', token ='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Imp1bGlhbmEucmhlZUBnbWFpbC5jb20iLCJsZXZlbCI6Im5vYXV0aCIsImltYWdlLXVybCI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0ppOE9KZjU2c1lkNWQ0Y2NtTGhSeGNHcDhmREp6RXl0N2VKZ2x5X1FpVDIwNGFnZz1zOTYtYz9zej01MD9zej01MCIsImV4cCI6MTkzODQ4NjA2NH0.RNsqAZ7V_4-M9iuJTSr_Hr7KECl4dbFnDENFZZAZIS4')
-    c.fetch_version()
-
 def get_LC10_ids_Sten2021():
     """
     Returns hard-coded LC10 neuron IDs from Sten2021 supplementary data.
