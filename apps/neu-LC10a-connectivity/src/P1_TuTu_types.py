@@ -345,16 +345,19 @@ post_variable = 'bodyId_post'
 
 pre_grouper = 'roi_noside'
 post_grouper = 'type_post'
-                                                                      
+sorted_by_grouper = True 
+
 LC10a_in = LC10a_inputs_conn_df[LC10a_inputs_conn_df['side']=='R'].copy()
 
 LC10a_in_conn_matrix = connection_table_to_matrix(LC10a_in,
                         group_cols=[pre_variable, post_variable],
                         sort_by= [ 'roi_noside', 'weight']) #, 'bodyId', sort_by='instance')
-# Sort by weight
-sorted_in= LC10a_in.groupby(['type_pre'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-LC10a_in_conn_matrix = LC10a_in_conn_matrix.loc[sorted_in['type_pre'].values]
-#LC10a_in_conn_matrix = LC10a_in_conn_matrix[sorted_in['type_post'].values] 
+                    
+if not sorted_by_grouper:
+    # Sort by weight
+    sorted_in= LC10a_in.groupby(['type_pre'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
+    LC10a_in_conn_matrix = LC10a_in_conn_matrix.loc[sorted_in['type_pre'].values]
+    #LC10a_in_conn_matrix = LC10a_in_conn_matrix[sorted_in['type_post'].values] 
 
 # ROI colors
 pre_grouper_dict = {roi: sns.color_palette("tab10")[i] 
@@ -372,7 +375,7 @@ fig = plot_grouped_connection_matrix(log_LC10a_in, LC10a_in,
                                      group_per_col=None,
                                      pre_grouper = pre_grouper,
                                      post_grouper = post_grouper,
-                                     sorted_by_grouper=True,
+                                     sorted_by_grouper=sorted_by_grouper,
                                      pre_variable=pre_variable,
                                      post_variable=post_variable,
                                      annotate_rows=True,
@@ -389,6 +392,7 @@ highlight_row_or_column(fig.axes[0], log_LC10a_in, row_label='TuTuA_2',
 pre_variable = 'bodyId_pre'
 post_variable = 'type_post'
 
+sorted_by_grouper = False
 pre_grouper = 'roi_noside'
 post_grouper = 'roi_noside'
                
@@ -396,10 +400,11 @@ post_grouper = 'roi_noside'
 LC10a_out = LC10a_outputs_conn_df[LC10a_outputs_conn_df['side']=='R'].copy()
 LC10a_out_conn_matrix = connection_table_to_matrix(LC10a_out,
                         group_cols=['bodyId_pre', 'type_post'],
-                        sort_by= ['bodyId_pre', 'weight']) #, 'bodyId', sort_by='instance')    
-# Sort by weight
-sorted_out = LC10a_out.groupby(['type_post'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-LC10a_out_conn_matrix = LC10a_out_conn_matrix[sorted_out['type_post'].values]
+                        sort_by= ['weight', post_grouper])#'weight']) #, 'bodyId', sort_by='instance')    
+if not sorted_by_grouper:
+    # Sort by weight
+    sorted_out = LC10a_out.groupby(['type_post'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
+    LC10a_out_conn_matrix = LC10a_out_conn_matrix[sorted_out['type_post'].values]
 
 # Colormap
 post_grouper_dict = {roi: sns.color_palette("tab10")[i] 
@@ -414,7 +419,7 @@ log_LC10a_out = log_LC10a_out.replace(-np.inf, np.nan)
 fig = plot_grouped_connection_matrix(log_LC10a_out, 
                                      LC10a_out, 
                                      post_grouper_dict=post_grouper_dict,
-                                     sorted_by_grouper=True,
+                                     sorted_by_grouper=sorted_by_grouper,
                                      pre_grouper = pre_grouper,
                                      post_grouper = post_grouper,
                                      pre_variable=pre_variable,
@@ -462,25 +467,43 @@ print(sorted_TuTuA2_outputs.iloc[0:20])
 pre_variable = 'type_pre'
 post_variable = 'instance_post'
 
-pre_grouper = 'roi'
-post_grouper = 'type_post'
+sorted_by_grouper = False
+manual_groups = sorted_by_grouper #False
+pre_grouper = 'roi_noside'
+post_grouper = 'roi_noside' #'type_post'
 
 TuTuA2_inputs_conn_df['roi_noside'] = TuTuA2_inputs_conn_df['roi'].str.extract(r'^(.*)\(.*\)', expand=False)
 TuTuA2_in = TuTuA2_inputs_conn_df[#(TuTuA2_inputs_conn_df['side']=='R')
                                   (TuTuA2_inputs_conn_df['weight']>=10)].copy()
 
+# TODO:
+# TuTuA2_in[TuTuA2_in['type_pre']=='SLP122_b']
+# has multiple ROIs associated with it, why?
+# pre - post - roi
+# 26579   11452   AOTU(R)
+# 26579	11452	SIP(R)	
+# 44027	11452	AOTU(R)
+# 44027	11452	SIP(R)	
+ 
+#%
 TuTuA2_in_conn_matrix = connection_table_to_matrix(TuTuA2_in,
                         group_cols=[pre_variable, post_variable],
                         sort_by= [ pre_grouper, post_grouper]) #'weight']) 
 
-in_vals = TuTuA2_in_conn_matrix.index.tolist()
-sort_by_roi = TuTuA2_in[[pre_variable, 'roi']].drop_duplicates().sort_values(by='roi')
-TuTuA2_in_conn_matrix = TuTuA2_in_conn_matrix.loc[sort_by_roi[pre_variable].values]
+if manual_groups: #sorted_by_grouper:
+    in_vals = TuTuA2_in_conn_matrix.index.tolist()
+    sort_by_roi = TuTuA2_in[[pre_variable, pre_grouper]]\
+                            .drop_duplicates()\
+                            .sort_values(by=pre_grouper)
+    TuTuA2_in_conn_matrix = TuTuA2_in_conn_matrix.loc[sort_by_roi[pre_variable].values]
+    group_per_row = sort_by_roi[pre_grouper].values
+else:
+    group_per_row = None
 
-# Sort by weight
-#sorted_TuTuA2_inputs = TuTuA2_in.groupby([ pre_variable, pre_grouper])['weight'].sum().reset_index().sort_values(by=['weight'], ascending=False)
-#sorted_TuTuA2_inputs = TuTuA2_in.groupby(['type_pre'])['weight'].sum().reset_index().sort_values(by=['weight'], ascending=False)
-#TuTuA2_in_conn_matrix = TuTuA2_in_conn_matrix.loc[sorted_TuTuA2_inputs['type_pre'].values]
+    # Sort by weight
+    sorted_TuTuA2_inputs = TuTuA2_in.groupby([ pre_variable, pre_grouper])['weight'].sum().reset_index().sort_values(by=['weight'], ascending=False)
+    sorted_TuTuA2_inputs = TuTuA2_in.groupby(['type_pre'])['weight'].sum().reset_index().sort_values(by=['weight'], ascending=False)
+    TuTuA2_in_conn_matrix = TuTuA2_in_conn_matrix.loc[sorted_TuTuA2_inputs['type_pre'].values]
 
 # ROI colors
 pre_grouper_dict = {roi: sns.color_palette("tab10")[i] 
@@ -490,18 +513,13 @@ post_grouper_dict = {roi: sns.color_palette("tab10")[i]
 
 #% Plot TuTuA_2 inputs
 log_TuTuA2_in = np.log(TuTuA2_in_conn_matrix)
-
-
-
-[conn_df[conn_df[pre_variable]==bodyId][pre_grouper].values[0] 
-                    for bodyId in conn_matrix.index.tolist()]
-
 fig = plot_grouped_connection_matrix(log_TuTuA2_in, TuTuA2_in, 
                                      pre_grouper_dict=pre_grouper_dict,
                                      post_grouper_dict=post_grouper_dict,
                                      pre_grouper = pre_grouper,
                                      post_grouper = post_grouper,
-                                     sorted_by_grouper=False,
+                                     sorted_by_grouper=sorted_by_grouper,
+                                     group_per_row = group_per_row,
                                      pre_variable=pre_variable,
                                      post_variable=post_variable,
                                      annotate_rows=True,
@@ -538,6 +556,8 @@ sorted_P1_1a_outputs = P1_1a_outputs_conn_df.groupby(['type_post',
 print('P1_1a outputs:')
 print(sorted_P1_1a_outputs.iloc[0:20])
 #%%
+# What are the P1 inputs to SMP/SIP?
 
-neu.fetch_adjacencies(sources=NC(type=P1_types, client=c),
+neu.fetch_adjacencies(#sources=NC(type=P1_types, client=c),
                       targets=NC(type='SMP054', client=c))
+# %%
