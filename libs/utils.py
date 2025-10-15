@@ -7,9 +7,22 @@ Created on Thu Mar 9 11:06:00 2024
 @Author  :   julianarhee, rishikamohanta
 '''
 import os
+import re
 import numpy as np
 import pandas as pd
 
+
+#%%
+natsort = lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split('(\d+)', s)]
+
+def log_weights(conn_matrix):
+    conn_matrix = np.log(conn_matrix)
+    conn_matrix = conn_matrix.replace(np.inf, np.nan)
+    conn_matrix = conn_matrix.replace(-np.inf, np.nan)
+    return conn_matrix
+
+
+#%%
 def get_LC10_ids_Sten2021():
     """
     Returns hard-coded LC10 neuron IDs from Sten2021 supplementary data.
