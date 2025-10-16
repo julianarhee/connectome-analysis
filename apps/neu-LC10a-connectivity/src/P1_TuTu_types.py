@@ -13,7 +13,7 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from pandas.compat import F
+#from pandas.compat import F
 import seaborn as sns
 
 import neuprint as neu
@@ -22,6 +22,9 @@ from neuprint import NeuronCriteria as NC
 from neuprint.utils import connection_table_to_matrix
 
 import utils as util
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
+from scipy.spatial.distance import pdist, squareform
 
 #%%
 
@@ -32,6 +35,9 @@ def plot_connection_matrix(conn_matrix,
                            vmin=10, vmax=None,
                            colorbar_label='weight',
                            figsize=None,
+                           show_grid=False,
+                           grid_lw=0.5,
+                           grid_color='white',
                            ax=None):
 
     if ax is None:
@@ -69,9 +75,20 @@ def plot_connection_matrix(conn_matrix,
     
     # Create heatmap
     sns.heatmap(conn_matrix, ax=ax, vmin=vmin, vmax=vmax, cmap='magma',
-                cbar_kws={'shrink': 0.5, 'anchor': (0, 0.0), 'label': colorbar_label},
-                yticklabels=yticklabels, xticklabels=xticklabels)
+                cbar_kws={'shrink': 0.1, 'anchor': (0, 0.0), 'label': colorbar_label},
+                yticklabels=yticklabels, xticklabels=xticklabels,
+                linewidths=grid_lw if show_grid else 0,
+                linecolor=grid_color if show_grid else None)
     
+    # Add complete border if grid is enabled
+    if show_grid:
+        n_rows, n_cols = conn_matrix.shape
+        # Get the current limits of the heatmap
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+       
+        sns.despine(ax=ax, right=False, bottom=False)
+       
     # Modify colorbar tick labels if vmax is provided and not 1.0
     if vmax is not None and vmax != 1.0:
         cbar = ax.collections[0].colorbar
@@ -420,6 +437,301 @@ def norm_conn_matrix_by_target_inputs(conn_matrix, conn_df, target='instance_pos
         conn_matrix[col] = conn_matrix[col].div(total_weight)
     return conn_matrix
 
+
+def _apply_thresholding(conn_matrix, threshold=None, threshold_percentile=90):
+    """
+    Apply thresholding to connection matrix.
+    
+    Parameters:
+    -----------
+    conn_matrix : pd.DataFrame
+        Connection matrix to threshold
+    threshold : float, optional
+        Absolute threshold for connections
+    threshold_percentile : float, default 90
+        Percentile threshold (keep top X% of connections per row/column)
+    
+    Returns:
+    --------
+    matrix_thresholded : pd.DataFrame
+        Thresholded matrix
+    """
+    if threshold is not None:
+        # Absolute threshold
+        return conn_matrix.where(conn_matrix > threshold, 0)
+    else:
+        # Percentile-based thresholding
+        matrix_thresholded = conn_matrix.copy()
+        for i in range(len(conn_matrix)):
+            # Keep only top percentile of connections per row
+            threshold_val = np.percentile(conn_matrix.iloc[i].values, threshold_percentile)
+            matrix_thresholded.iloc[i] = conn_matrix.iloc[i].where(
+                conn_matrix.iloc[i] >= threshold_val, 0)
+        
+        for j in range(len(conn_matrix.columns)):
+            # Keep only top percentile of connections per column
+            threshold_val = np.percentile(conn_matrix.iloc[:, j].values, threshold_percentile)
+            matrix_thresholded.iloc[:, j] = conn_matrix.iloc[:, j].where(
+                conn_matrix.iloc[:, j] >= threshold_val, 0)
+        
+        return matrix_thresholded
+
+
+def _compute_clustering(matrix_filled, method='ward'):
+    """
+    Compute hierarchical clustering using cosine similarity.
+    
+    Parameters:
+    -----------
+    matrix_filled : pd.DataFrame or np.ndarray
+        Matrix with NaN values filled (thresholded or original)
+    method : str, default 'ward'
+        Linkage method for hierarchical clustering
+    
+    Returns:
+    --------
+    row_linkage : np.ndarray
+        Linkage matrix for rows
+    col_linkage : np.ndarray
+        Linkage matrix for columns
+    """
+    # Calculate cosine similarity for rows (source patterns)
+    row_similarity = cosine_similarity(matrix_filled.values)
+    row_distance = 1 - row_similarity  # Convert similarity to distance
+    np.fill_diagonal(row_distance, 0)  # Ensure diagonal is exactly zero
+    row_linkage = linkage(squareform(row_distance), method=method)
+    
+    # Calculate cosine similarity for columns (target patterns)
+    col_similarity = cosine_similarity(matrix_filled.values.T)
+    col_distance = 1 - col_similarity  # Convert similarity to distance
+    np.fill_diagonal(col_distance, 0)  # Ensure diagonal is exactly zero
+    col_linkage = linkage(squareform(col_distance), method=method)
+    
+    return row_linkage, col_linkage
+
+
+def cluster_matrix_cosine_similarity(conn_matrix, method='ward', threshold=None, threshold_percentile=None):
+    """
+    Cluster connection matrix using cosine similarity and hierarchical clustering.
+    
+    Parameters:
+    -----------
+    conn_matrix : pd.DataFrame
+        Connection matrix to cluster
+    method : str, default 'ward'
+        Linkage method for hierarchical clustering ('ward', 'complete', 'average', 'single')
+    threshold : float, optional
+        Absolute threshold for connections (e.g., 0.05). Higher values keeps most connections (conservative, 90). Lower (e.g., 50) keeps only strongest connections.
+    threshold_percentile : float, optional
+        Percentile threshold (keep top X% of connections per row/column). If provided, overrides threshold.
+    
+    Returns:
+    --------
+    clustered_matrix : pd.DataFrame
+        Reordered matrix based on clustering
+    row_linkage : np.ndarray
+        Linkage matrix for rows
+    col_linkage : np.ndarray
+        Linkage matrix for columns
+    matrix_used : pd.DataFrame, optional
+        Thresholded matrix used for clustering (only returned if thresholding was applied)
+    """
+    # Apply thresholding if specified
+    if threshold is not None or threshold_percentile is not None:
+        matrix_used = _apply_thresholding(conn_matrix, threshold, threshold_percentile)
+        matrix_filled = matrix_used.fillna(0)
+        return_thresholded = True
+    else:
+        matrix_filled = conn_matrix.fillna(0)
+        return_thresholded = False
+    
+    # Compute clustering
+    row_linkage, col_linkage = _compute_clustering(matrix_filled, method)
+    
+    # Get the order of rows and columns based on clustering
+    row_order = leaves_list(row_linkage)
+    col_order = leaves_list(col_linkage)
+    
+    # Reorder the original matrix (not the thresholded one)
+    clustered_matrix = conn_matrix.iloc[row_order, col_order]
+    
+    if return_thresholded:
+        return clustered_matrix, row_linkage, col_linkage, matrix_used
+    else:
+        return clustered_matrix, row_linkage, col_linkage
+
+
+def cluster_matrix_cosine_similarity_thresholded(conn_matrix, method='ward', threshold=None, threshold_percentile=90):
+    """
+    Convenience function for thresholded clustering. Calls cluster_matrix_cosine_similarity with thresholding.
+    
+    Parameters:
+    -----------
+    conn_matrix : pd.DataFrame
+        Connection matrix to cluster
+    method : str, default 'ward'
+        Linkage method for hierarchical clustering
+    threshold : float, optional
+        Absolute threshold for connections (e.g., 0.05). Higher values keeps most connections (conservative, 90). Lower (e.g., 50) keeps only strongest connections.
+    threshold_percentile : float, default 90
+        Percentile threshold (keep top X% of connections per row/column)
+    
+    Returns:
+    --------
+    clustered_matrix : pd.DataFrame
+        Reordered matrix based on clustering
+    row_linkage : np.ndarray
+        Linkage matrix for rows
+    col_linkage : np.ndarray
+        Linkage matrix for columns
+    matrix_thresholded : pd.DataFrame
+        Thresholded matrix used for clustering
+    """
+    return cluster_matrix_cosine_similarity(conn_matrix, method, threshold, threshold_percentile)
+
+
+def plot_dendrograms(row_linkage, col_linkage, row_labels=None, col_labels=None, 
+                    figsize=(15, 8), n_clusters=None):
+    """
+    Plot dendrograms for row and column clustering.
+    
+    Parameters:
+    -----------
+    row_linkage : np.ndarray
+        Linkage matrix for rows
+    col_linkage : np.ndarray
+        Linkage matrix for columns
+    row_labels : list, optional
+        Labels for rows
+    col_labels : list, optional
+        Labels for columns
+    figsize : tuple, default (15, 8)
+        Figure size
+    n_clusters : int, optional
+        Number of clusters to highlight with colors
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+    
+    # Plot row dendrogram: which types are most/least similar?
+    dendrogram(row_linkage, ax=ax1, orientation='left', labels=row_labels,
+               color_threshold=0.7*np.max(row_linkage[:,2]) if n_clusters is None else None)
+    ax1.set_title('Source Clustering (Output Patterns)')
+    ax1.set_xlabel('Distance')
+    ax1.set_ylabel('P1 Types (Pre-synaptic Sources)')
+    
+    # Plot column dendrogram
+    dendrogram(col_linkage, ax=ax2, orientation='top', labels=col_labels,
+               color_threshold=0.7*np.max(col_linkage[:,2]) if n_clusters is None else None)
+    ax2.set_title('Target Clustering (Input Patterns)')
+    ax2.set_xlabel('P1 Types (Post-synaptic Targets)')
+    ax2.set_ylabel('Distance')
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_cluster_analysis(clustered_matrix, row_linkage, col_linkage, 
+                         n_clusters=5, figsize=(20, 12), grid_lw=0, 
+                         show_all_labels=False, label_fontsize=8):
+    """
+    Create a comprehensive cluster analysis plot with dendrograms and heatmap.
+    
+    Parameters:
+    -----------
+    clustered_matrix : pd.DataFrame
+        Clustered connection matrix
+    row_linkage : np.ndarray
+        Linkage matrix for rows
+    col_linkage : np.ndarray
+        Linkage matrix for columns
+    n_clusters : int, default 5
+        Number of clusters to analyze
+    figsize : tuple, default (20, 12)
+        Figure size
+    grid_lw : float, default 0
+        Grid line width for heatmap
+    show_all_labels : bool, default False
+        Whether to show all row and column labels
+    label_fontsize : int, default 8
+        Font size for labels when show_all_labels=True
+    """
+    from scipy.cluster.hierarchy import fcluster
+    
+    # Create subplots
+    fig = plt.figure(figsize=figsize)
+    
+    # Define grid layout
+    gs = fig.add_gridspec(3, 3, height_ratios=[1, 1, 1], width_ratios=[1, 4, 1],
+                         hspace=0.3, wspace=0.4)
+    
+    # Prepare labels for dendrograms and heatmap
+    if show_all_labels:
+        row_labels = clustered_matrix.index.tolist()
+        col_labels = clustered_matrix.columns.tolist()
+        yticklabels = True
+        xticklabels = True
+    else:
+        row_labels = None
+        col_labels = None
+        yticklabels = True
+        xticklabels = True
+    
+    # Row dendrogram (left)
+    ax_row_dendro = fig.add_subplot(gs[:, 0])
+    dendrogram(row_linkage, ax=ax_row_dendro, orientation='left',
+               color_threshold=0.7*np.max(row_linkage[:,2]),
+               labels=row_labels)
+    ax_row_dendro.set_title('Source\nClusters', fontsize=12, pad=10)
+    ax_row_dendro.set_xlabel('Distance')
+    if show_all_labels:
+        ax_row_dendro.tick_params(axis='y', labelsize=label_fontsize)
+    
+    # Column dendrogram (top)
+    ax_col_dendro = fig.add_subplot(gs[0, 1])
+    dendrogram(col_linkage, ax=ax_col_dendro, orientation='top',
+               color_threshold=0.7*np.max(col_linkage[:,2]),
+               labels=col_labels)
+    ax_col_dendro.set_title('Target Clusters', fontsize=12, pad=10)
+    ax_col_dendro.set_ylabel('Distance')
+    if show_all_labels:
+        ax_col_dendro.tick_params(axis='x', labelsize=label_fontsize, rotation=90)
+    
+    # Main heatmap (center)
+    ax_heatmap = fig.add_subplot(gs[1:, 1])
+    
+    # Plot clustered heatmap
+    sns.heatmap(clustered_matrix, ax=ax_heatmap, cmap='viridis', 
+                cbar_kws={'shrink': 0.8}, linewidths=grid_lw,
+                yticklabels=yticklabels, xticklabels=xticklabels)
+    ax_heatmap.set_title('P1-P1 Connections (Cosine Similarity Clustered)', fontsize=12, pad=10)
+    ax_heatmap.set_xlabel('Post-synaptic P1 Type')
+    ax_heatmap.set_ylabel('Pre-synaptic P1 Type')
+    
+    # Adjust label formatting for heatmap
+    if show_all_labels:
+        ax_heatmap.tick_params(axis='both', labelsize=label_fontsize)
+        # Rotate x-axis labels for better readability
+        plt.setp(ax_heatmap.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
+    
+    # Add cluster information
+    row_clusters = fcluster(row_linkage, n_clusters, criterion='maxclust')
+    col_clusters = fcluster(col_linkage, n_clusters, criterion='maxclust')
+    
+    # Print cluster information
+    print(f"\nRow Clusters (n={n_clusters}):")
+    for i in range(1, n_clusters + 1):
+        cluster_mask = row_clusters == i
+        cluster_labels = clustered_matrix.index[cluster_mask].tolist()
+        print(f"  Cluster {i}: {cluster_labels}")
+    
+    print(f"\nColumn Clusters (n={n_clusters}):")
+    for i in range(1, n_clusters + 1):
+        cluster_mask = col_clusters == i
+        cluster_labels = clustered_matrix.columns[cluster_mask].tolist()
+        print(f"  Cluster {i}: {cluster_labels}")
+    
+    return fig, row_clusters, col_clusters
+
 #%%
 # Load token from shell (IDE doesn't inherit .zshrc env vars)
 import subprocess
@@ -464,11 +776,13 @@ sorted_LC10a_inputs = LC10a_inputs_conn_df.groupby(['roi_noside',
 print('LC10a inputs:')
 print(sorted_LC10a_inputs.iloc[0:20])
 
+
 #%%
 # LC10a: Get all outputs: 
 # -------------------------------------------------------
 # bodyId_pre are the LC10a source IDs, bodyId_post are the target IDs
-LC10a_outputs_neuron_df, LC10a_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type=['LC10a']), 
+LC10a_outputs_neuron_df, LC10a_outputs_conn_df = neu.fetch_adjacencies(
+                                                        sources=NC(type=['LC10a']), 
                                                         targets=None,
                                                         min_total_weight=min_total_weight)
 LC10a_outputs_conn_df = neu.merge_neuron_properties(LC10a_outputs_neuron_df, LC10a_outputs_conn_df, ['type', 'instance'])
@@ -480,6 +794,8 @@ sorted_LC10a_outputs = LC10a_outputs_conn_df.groupby(['roi_noside',
                                                       'type_post'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
 print('LC10a outputs:')
 print(sorted_LC10a_outputs.iloc[0:20])
+
+                          
 #%%
 
 # Show Connection Matrix for LC10a
@@ -647,7 +963,8 @@ TuTuA2_neurons, TuTuA2_roi_counts = neu.fetch_neurons(NC(type='TuTuA_2',
                                                          client=c))
 #%
 # Get all inputs
-TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df = neu.fetch_adjacencies(targets=NC(type=['TuTuA_2']))
+TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                                       targets=NC(type=['TuTuA_2']))
 TuTuA2_inputs_conn_df = neu.merge_neuron_properties(TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df, ['type', 'instance'])
 TuTuA2_inputs_conn_df['side'] = TuTuA2_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
 # 
@@ -670,6 +987,8 @@ print(sorted_TuTuA2_outputs.iloc[0:20])
 #%%
 # TuTuA_2 inputs: Aggregate all weights (aggregate across ROIs) to get total connection weights
 # ------------------------------------------------------------
+weight_type = 'percent' # can be: 'weight', 'percent', 'log'
+
 TuTuA2_in = TuTuA2_inputs_conn_df[(TuTuA2_inputs_conn_df['weight']>=10  )]\
                   .groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'instance_post'],
                   as_index=False)['weight'].sum().sort_values(by='weight', ascending=False)
@@ -677,24 +996,27 @@ TuTuA2_in_conn_mat = connection_table_to_matrix(TuTuA2_in,
                         group_cols=['type_pre', 'instance_post'],
                         sort_by= ['weight', 'weight'])
 
-# Normalize by dividing each column in matrix by total weight of each post-target
-TuTuA2_in_conn_mat = norm_conn_matrix_by_target_inputs(TuTuA2_in_conn_mat, TuTuA2_in, 
-                                        target='instance_post')
-#%
-# Plot TuTuA_2 inputs: aggregate side and ROI
-use_log_weights = False 
-if use_log_weights:
-    TuTuA2_in_conn_log = util.log_weights(TuTuA2_in_conn_mat)
-    vmax = TuTuA2_in_conn_log.max().max()
-    vmin = TuTuA2_in_conn_log.min().min()
+
+if weight_type == 'percent':
+    # Normalize by dividing each column in matrix by total weight of each post-target
+    TuTuA2_in_conn_mat = norm_conn_matrix_by_target_inputs(TuTuA2_in_conn_mat, TuTuA2_in, 
+                                            target='instance_post')
+    TuTuA2_in_conn_mat[TuTuA2_in_conn_mat==0] = np.nan
+    colorbar_label = 'percent of total inputs'
+    vmin = 0
+    vmax = 0.1
+elif weight_type == 'log':
+    TuTuA2_in_conn_mat = util.log_weights(TuTuA2_in_conn_mat)
+    vmax = TuTuA2_in_conn_mat.max().max()
+    vmin = TuTuA2_in_conn_mat.min().min()
     colorbar_label = 'log(weight)'
-else:
-    TuTuA2_in_conn_log = TuTuA2_in_conn_mat
-    vmin=0.0
-    vmax=0.1
+elif weight_type == 'weight':
+    TuTuA2_in_conn_mat = TuTuA2_in_conn_mat
     colorbar_label = 'weight'
+    vmin=None; vmax=None;
+    
 fig, ax = plt.subplots(figsize=(6, 6))
-fig = plot_connection_matrix(TuTuA2_in_conn_log, ax=ax, 
+fig = plot_connection_matrix(TuTuA2_in_conn_mat, ax=ax, 
                              vmin=vmin, vmax=vmax,
                              show_all_row_labels=True,
                              show_all_col_labels=True,
@@ -783,41 +1105,51 @@ fig.axes[0].set_title('TuTuA_2 inputs')
 highlight_row_or_column(fig.axes[0], plot_TuTuA2_in, row_label='SMP054',
                         color='k', linewidth=2)
 
+
+
 #%%
 # Get all P1 types
 # ======================================================
-P1_types = ['P1_1b']
-P1_1a_inputs_neuron_df, P1_1a_inputs_conn_df = neu.fetch_adjacencies(targets=NC(type=P1_types, 
+P1_types = ['P1_1b', 'P1_1a']
+P1_1_inputs_neuron_df, P1_1_inputs_conn_df = neu.fetch_adjacencies(targets=NC(type=P1_types, 
                                             client=c))
-P1_1a_inputs_conn_df = neu.merge_neuron_properties(P1_1a_inputs_neuron_df, P1_1a_inputs_conn_df, ['type', 'instance'])
-P1_1a_inputs_conn_df['side'] = P1_1a_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
+P1_1_inputs_conn_df = neu.merge_neuron_properties(P1_1_inputs_neuron_df, P1_1_inputs_conn_df, ['type', 'instance'])
 #%
-# P1_1a: Group conn_df by type_pre, and sort by sum of weight
-sorted_P1_1a_inputs = P1_1a_inputs_conn_df.groupby(['type_post', 
+# P1: Group conn_df by type_pre, and sort by sum of weight
+sorted_P1_1_inputs = P1_1_inputs_conn_df.groupby(['type_post', 
                                                     'type_pre', 
-                                                    'side'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-print('P1_1a inputs:')
-print(sorted_P1_1a_inputs.iloc[0:20])
+                                                    ])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
+print('P1_1 inputs:')
+print(sorted_P1_1_inputs.iloc[0:20])
 #%
 # Get all P1 outputs
-P1_1a_outputs_neuron_df, P1_1a_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type=P1_types), targets=None)
-P1_1a_outputs_conn_df = neu.merge_neuron_properties(P1_1a_outputs_neuron_df, P1_1a_outputs_conn_df, ['type', 'instance'])
-P1_1a_outputs_conn_df['side'] = P1_1a_outputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
+P1_1_outputs_neuron_df, P1_1_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type=P1_types), targets=None)
+P1_1_outputs_conn_df = neu.merge_neuron_properties(P1_1_outputs_neuron_df, P1_1_outputs_conn_df, ['type', 'instance'])
+#P1_1_outputs_conn_df['side'] = P1_1_outputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
 #%
-# P1_1a: Group conn_df by type_post, and sort by sum of weight
-sorted_P1_1a_outputs = P1_1a_outputs_conn_df.groupby(['type_post', 
+# P1_1: Group conn_df by type_post, and sort by sum of weight
+sorted_P1_1_outputs = P1_1_outputs_conn_df.groupby(['type_post', 
                                                     'type_pre', 
-                                                    'side'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-print('P1_1a outputs:')
-print(sorted_P1_1a_outputs.iloc[0:20])
-#%%
-# What are the P1 inputs to SMP/SIP?
-P1_types = ['P1_1b', 'P1_1a', 'P1_4a', 'P1_4b', 'P1_18a', 'P1_18b']
-SMP_types = ['SMP054', 'SMP391', 'SMP394']
-neu.fetch_adjacencies(sources=NC(type=P1_types, client=c),
-                      targets=NC(type=SMP_types, client=c))
+                                                    ])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
+sorted_P1_1b_outputs = sorted_P1_1_outputs[sorted_P1_1_outputs['type_pre']=='P1_1b']
+print('P1_1b outputs:')
+print(sorted_P1_1b_outputs.iloc[0:20])
 
-# %%
+
+#%%
+# P1_1 total inputs
+P1_1_inputs_aggr = P1_1_inputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
+                                                    as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)     
+total_P1_1_inputs = P1_1_inputs_aggr['weight'].sum()
+P1_1_inputs_aggr['percent_of_total'] = P1_1_inputs_aggr['weight'] / total_P1_1_inputs
+
+P1_1_inputs_by_type = P1_1_inputs_aggr.groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
+
+P1_1a_inputs_by_type = P1_1_inputs_aggr[P1_1_inputs_aggr['type_post']=='P1_1a'].groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
+#print(P1_1a_inputs_by_type)
+P1_1b_inputs_by_type = P1_1_inputs_aggr[P1_1_inputs_aggr['type_post']=='P1_1b'].groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
+print(P1_1b_inputs_by_type)
 
 #%%
 # Plot connection matrix
@@ -870,5 +1202,350 @@ plot_connection_matrix(curr_conn_matrix, ax=ax,
 ax.set_title('{} -> {} connections'.format(pre_type, post_type))
 ax.set_xlabel('Post-synaptic {} type'.format(post_type))
 ax.set_ylabel('Pre-synaptic {} type'.format(pre_type))
-plt.show()
+
+#%%
+# Get all P1 INPUTS:
+P1_inputs_neuron_df, P1_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                               targets=NC(type='P1.*'))
+P1_inputs_conn_df = neu.merge_neuron_properties(P1_inputs_neuron_df, P1_inputs_conn_df, ['type', 'instance'])
+#P1_inputs_conn_df['side'] = P1_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
+
+# Group by type_pre and divide its weight onto a given type_post by dividing by the total weights onto that type_post
+total_P1_inputs = P1_inputs_conn_df.groupby('type_post', as_index=False)['weight'].sum()
+for type_post, df_ in P1_inputs_conn_df.groupby('type_post'):
+    df_['percent_of_total'] = df_['weight'] / total_P1_inputs[total_P1_inputs['type_post']==type_post]['weight'].values[0]
+    P1_inputs_conn_df.loc[P1_inputs_conn_df['type_post']==type_post, 'percent_of_total'] = df_['percent_of_total']
+#%
+# P1: Group conn_df by type_pre, and sort by sum of weight
+sorted_P1_inputs = P1_inputs_conn_df.groupby(['type_post', 'type_pre'],
+                                               as_index=False)['percent_of_total'].sum().sort_values(by='percent_of_total', ascending=False)
+print('P1inputs:')
+print(sorted_P1_inputs.iloc[0:20])
+#%%
+# Get ALL P1 OUTPUTS:
+# ------------------------------------------------------------
+P1_outputs_neuron_df, P1_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type='P1.*'), 
+                                                                 targets=None)
+P1_outputs_conn_df = neu.merge_neuron_properties(P1_outputs_neuron_df, P1_outputs_conn_df, ['type', 'instance'])
+
+# Out of all the outputs a given P1 type makes, what percent goes to a given target
+total_P1_outputs = P1_outputs_conn_df.groupby('type_pre', as_index=False)['weight'].sum()
+for type_pre, df_ in P1_outputs_conn_df.groupby('type_pre'):
+    df_['percent_of_total'] = df_['weight'] / total_P1_outputs[total_P1_outputs['type_pre']==type_pre]['weight'].values[0]
+    P1_outputs_conn_df.loc[P1_outputs_conn_df['type_pre']==type_pre, 'percent_of_total'] = df_['percent_of_total']
+#%
+# P1_1: Group conn_df by type_post, and sort by sum of weight
+sorted_P1_outputs = P1_outputs_conn_df.groupby(['type_pre', 'type_post'],
+                                               as_index=False)['percent_of_total'].sum().sort_values(by='percent_of_total', ascending=False)
+print('P1outputs:')
+print(sorted_P1_outputs.iloc[0:20])
+
+#%% 
+# P1 INPUTS:  Plot input matrix
+clear_empty_cells = True
+topN = 50
+min_input_weight = 0.01
+P1_input_conn_matrix = connection_table_to_matrix(P1_inputs_conn_df,
+                                    weight_col='percent_of_total',
+                                    group_cols=['type_pre', 'type_post'],
+                                    sort_by= ['type_pre', 'type_post'])
+
+# Manually sort P1 labels (filter out None values)
+pre_order = P1_input_conn_matrix.sum(axis=1).sort_values(ascending=False).index.tolist()
+post_order = sorted([x if x is not None else 'None' for x in P1_inputs_conn_df['type_post'].unique() if x is not None], key=util.natsort)
+P1_input_conn_matrix = P1_input_conn_matrix.reindex(index=pre_order, columns=post_order)
+
+# Only take top N rows
+P1_summed_inputs = P1_input_conn_matrix.sum(axis=1).sort_values(ascending=False)
+P1_summed_inputs.iloc[0:30]
+
+#%
+# Only include connections with some min weight
+if min_input_weight > 0:
+    P1_input_conn_matrix[P1_input_conn_matrix < min_input_weight] = 0
+# Drop any rows that have all NaN values
+#P1_input_conn_filt = P1_input_conn_filt.dropna(axis=0, how='all')
+#
+P1_input_conn_filt = P1_input_conn_matrix.loc[P1_summed_inputs.index[0:topN]]
+# Plot
+if clear_empty_cells:
+    P1_input_conn_filt[P1_input_conn_filt==0] = np.nan
+    
+vmin = min_input_weight
+vmax = 0.2
+colorbar_label = 'percent of total inputs'
+# Plot P1 input matrix
+#fig, ax = plt.subplots(figsize=(6, 15))
+fig = plot_connection_matrix(P1_input_conn_filt, ax=None, #ax,
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=colorbar_label,
+                       normalize_colors=True,
+                       show_all_col_labels=True,
+                       show_all_row_labels=True, show_grid=True, 
+                       grid_color='k', grid_lw=0.01)
+fig.axes[0].set_xlabel('Post-synaptic P1 type')
+fig.axes[0].set_title('Top {} P1 inputs (min weight: {})'.format(topN, min_input_weight))
+
+
+#%%
+# Plot all P1 outputs
+
+P1_output_conn_matrix = connection_table_to_matrix(P1_outputs_conn_df,
+                                    weight_col='percent_of_total',
+                                    group_cols=['type_pre', 'type_post'],
+                                    sort_by= ['type_pre', 'type_post'])
+
+# Manually sort P1 labels (filter out None values)
+#pre_order = P1_output_conn_matrix.sum(axis=1).sort_values(ascending=False).index.tolist()
+pre_order = sorted(P1_output_conn_matrix.index.unique(), key=util.natsort)
+post_order = P1_output_conn_matrix.sum(axis=0).sort_values(ascending=False).index.tolist() #sorted([x if x is not None else 'None' for x in P1_outputs_conn_df['type_post'].unique() if x is not None], key=util.natsort)
+P1_output_conn_matrix = P1_output_conn_matrix.reindex(columns=post_order,
+                                                      index=pre_order)
+
+#%
+clear_empty_cells = False
+topN = 50
+min_output_weight = 0.05
+vmax = None
+
+# Only take top N outputs
+# Summing across the rows should equal to 1, since normalized each PRE by its total outputs
+# Sum across columns: Which targets of P1 types are getting the most?
+P1_summed_outputs = P1_output_conn_matrix.sum(axis=0).sort_values(ascending=False)
+P1_summed_outputs.iloc[0:30]
+P1_output_conn_matrix_filt = P1_output_conn_matrix[P1_summed_outputs.index[0:N]].copy()
+
+# Only include connections with some min weight
+if min_output_weight > 0:
+    P1_output_conn_matrix[P1_output_conn_matrix < min_output_weight] = 0    
+if clear_empty_cells:
+    P1_output_conn_matrix_filt[P1_output_conn_matrix_filt==0] = np.nan
+    
+# Plot P1 output matrix
+fig = plot_connection_matrix(P1_output_conn_matrix_filt, ax=None, #ax,
+                       vmin=vmin, vmax=None,
+                       colorbar_label=colorbar_label,
+                       normalize_colors=True,
+                       show_all_col_labels=True,
+                       show_all_row_labels=True, show_grid=False)
+                       #grid_color='k', grid_lw=0.0)
+fig.axes[0].set_xlabel('Post-synaptic P1 type')
+fig.axes[0].set_title('Top {} P1 outputs (min weight: {})'.format(topN, min_output_weight))
+
+# Highlight all outputs of P1_1b, where value greater than 0
+P1_1b_outputs = P1_output_conn_matrix_filt.loc['P1_1b'].sort_values(ascending=False)
+top_P1_1b_outputs = P1_1b_outputs.iloc[0:3]
+highlight_row_or_column(fig.axes[0], P1_output_conn_matrix_filt, 
+                        column_label=top_P1_1b_outputs.index.tolist(), 
+                        color='red', linewidth=1)
+
+#%%
+
+# Biggest NON-LC10 input to TuTuA_2 is SMP054
+# SMP054 gets most input from aIPG types
+
+
+# Bigggest P1_1b output is to these SIP neurons-- where do they go?
+top_SIP = ['SIP104m', 'SIP122m', 'SIP103m']
+SIP_ouputs_neuron_df, SIP_ouputs_conn_df = neu.fetch_adjacencies(sources=NC(type=top_SIP),
+                                                                 targets=None)
+SIP_ouputs_conn_df = neu.merge_neuron_properties(SIP_ouputs_neuron_df, 
+                                                 SIP_ouputs_conn_df, ['type', 'instance'])
+SIP_ouputs_aggr = SIP_ouputs_conn_df.groupby(['bodyId_pre', 
+                                              'bodyId_post', 
+                                              'type_pre', 'type_post'],
+                                            as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                ascending=False)     
+total_SIP_ouputs = SIP_ouputs_aggr['weight'].sum()
+SIP_ouputs_aggr['percent_of_total'] = SIP_ouputs_aggr['weight'] / total_SIP_ouputs
+
+top_SIP_outputs = SIP_ouputs_aggr[SIP_ouputs_aggr['type_pre'].isin(top_SIP)].groupby('type_post')['percent_of_total'].sum().sort_values(ascending=False)
+print(top_SIP_outputs.iloc[0:20])
+
+
+#%%
+
+#%%
+
+# Plot P1 to P1 connections
+P1_P1_neuron_df, P1_P1_conn_df = neu.fetch_adjacencies(sources=NC(type='P1.*'),
+                                                       targets=NC(type='P1.*'))
+P1_P1_conn_df = neu.merge_neuron_properties(P1_P1_neuron_df, P1_P1_conn_df, ['type', 'instance'])
+#%
+# P1_1: Group conn_df by type_post, and sort by sum of weight
+sorted_P1_P1 = P1_P1_conn_df.groupby(['type_post', 'type_pre'],
+                                               as_index=False)['weight'].sum().sort_values(by='weight', ascending=False)
+print('P1_P1:')
+print(sorted_P1_P1.iloc[0:20])
+
+# Normalize input weights by target inputs
+total_P1_P1_inputs = P1_P1_conn_df.groupby('type_post', as_index=False)['weight'].sum()
+for type_post, df_ in P1_P1_conn_df.groupby('type_post'):
+    df_['percent_of_total'] = df_['weight'] / total_P1_P1_inputs[total_P1_P1_inputs['type_post']==type_post]['weight'].values[0]
+    P1_P1_conn_df.loc[P1_P1_conn_df['type_post']==type_post, 'percent_of_total'] = df_['percent_of_total']
+#%
+# P1_P1: Group conn_df by type_pre, and sort by sum of weight
+sorted_P1_P1 = P1_P1_conn_df.groupby(['type_post', 'type_pre'],
+                                               as_index=False)['percent_of_total'].sum().sort_values(by='percent_of_total', ascending=False)
+print('P1_P1 inputs normalized by target inputs:')
+print(sorted_P1_P1.iloc[0:20])
+
+# Create connection matrix
+P1_P1_conn_matrix = connection_table_to_matrix(P1_P1_conn_df,
+                                    weight_col='percent_of_total',
+                                    group_cols=['type_pre', 'type_post'],
+                                    sort_by= ['type_pre', 'type_post'])
+# Sort labels alphabetically
+pre_order = sorted(P1_P1_conn_matrix.index.unique(), key=util.natsort)
+post_order = sorted(P1_P1_conn_matrix.columns.unique(), key=util.natsort)
+P1_P1_conn_matrix = P1_P1_conn_matrix.reindex(index=pre_order, columns=post_order)
+#%
+# Plot P1_P1 connection matrix
+vmin=None;vmax=None;
+fig, ax = plt.subplots(figsize=(6, 6))
+plot_connection_matrix(P1_P1_conn_matrix, ax=ax,
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=colorbar_label,
+                       normalize_colors=True,
+                       show_all_col_labels=True,
+                       show_all_row_labels=True, show_grid=True, 
+                       grid_color=[0.8]*3, grid_lw=0.001)
+ax.set_title('P1_P1 connections')
+ax.set_xlabel('Post-synaptic P1 type')
+ax.set_ylabel('Pre-synaptic P1 type')
+
+#%%
+# Cluster P1_P1_conn_matrix using cosine similarity
+P1_P1_clustered, row_linkage, col_linkage = cluster_matrix_cosine_similarity(P1_P1_conn_matrix, method='ward')
+
+# Plot clustered matrix
+fig = plot_connection_matrix(P1_P1_clustered,
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=colorbar_label,
+                       normalize_colors=True,
+                       show_all_col_labels=True,
+                       show_all_row_labels=True, show_grid=False, 
+                       grid_color=[0.8]*3, grid_lw=0.001)
+ax = fig.axes[0]
+ax.set_title('P1_P1 connections (cosine similarity clustered)')
+ax.set_xlabel('Post-synaptic P1 type')
+ax.set_ylabel('Pre-synaptic P1 type')
+
+#%%
+# Plot dendrograms to understand the clustering
+fig_dendro = plot_dendrograms(row_linkage, col_linkage, 
+                             row_labels=P1_P1_clustered.index.tolist(),
+                             col_labels=P1_P1_clustered.columns.tolist())
+
+
+#%%
+# Test thresholded clustering (focuses on strong connections)
+print("Testing thresholded clustering...")
+
+# Method 1: Percentile-based thresholding (keep top 85% of connections per row/column)
+P1_P1_clustered_thresh, row_linkage_thresh, col_linkage_thresh, matrix_thresh = \
+    cluster_matrix_cosine_similarity_thresholded(P1_P1_conn_matrix, 
+                                                 method='ward', 
+                                               threshold_percentile=90)
+
+# Plot comparison
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+
+# Original clustering
+plot_connection_matrix(P1_P1_clustered, ax=ax1, normalize_colors=True, show_grid=False)
+ax1.set_title('Original Clustering (All Connections)')
+
+# Thresholded clustering
+plot_connection_matrix(P1_P1_clustered_thresh, ax=ax2, normalize_colors=True, show_grid=False)
+ax2.set_title('Thresholded Clustering (Top 85% per row/column)')
+
+# Show thresholded matrix
+plot_connection_matrix(matrix_thresh, ax=ax3, normalize_colors=True, show_grid=False)
+ax3.set_title('Thresholded Matrix (Used for Clustering)')
+
+# Show difference
+diff_matrix = P1_P1_conn_matrix - matrix_thresh
+plot_connection_matrix(diff_matrix, ax=ax4, normalize_colors=True, show_grid=False)
+ax4.set_title('Removed Connections (Original - Thresholded)')
+
+plt.tight_layout()
+
+#%%
+# Plot dendrograms for thresholded clustering
+fig_dendro_thresh = plot_dendrograms(row_linkage_thresh, col_linkage_thresh, 
+                                   row_labels=P1_P1_clustered_thresh.index.tolist(),
+                                   col_labels=P1_P1_clustered_thresh.columns.tolist())
+fig_dendro_thresh.suptitle('Thresholded Clustering Dendrograms', fontsize=16)
+
+#%%
+# Create comprehensive cluster analysis
+thresholded=False
+if thresholded:
+    fig_analysis, row_clusters, col_clusters = plot_cluster_analysis(
+        P1_P1_clustered_thresh, row_linkage_thresh, col_linkage_thresh, 
+        n_clusters=5, figsize=(20, 14), grid_lw=0, 
+        show_all_labels=True, label_fontsize=8)
+else:
+    fig_analysis, row_clusters, col_clusters = plot_cluster_analysis(
+        P1_P1_clustered, row_linkage, col_linkage, 
+        n_clusters=5, figsize=(20, 14), grid_lw=0, 
+        show_all_labels=True, label_fontsize=8)
+#%%
+
+
+#%%
+# No side or ROI:
+LC10a_inputs_aggr = LC10a_inputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
+                             as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)    
+total_LC10a_inputs = LC10a_inputs_aggr['weight'].sum()
+LC10a_inputs_aggr['percent_of_total'] = LC10a_inputs_aggr['weight'] / total_LC10a_inputs
+
+LC10a_inputs_by_type = LC10a_inputs_aggr.groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
+print(LC10a_inputs_by_type)
+
+LC10a_outputs_aggr = LC10a_outputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
+                                                    as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)     
+
+# TuTuA_2 total inputs
+TuTuA2_inputs_aggr = TuTuA2_inputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
+                                                    as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)     
+total_TuTuA2_inputs = TuTuA2_inputs_aggr['weight'].sum()
+TuTuA2_inputs_aggr['percent_of_total'] = TuTuA2_inputs_aggr['weight'] / total_TuTuA2_inputs
+
+TuTuA2_inputs_by_type = TuTuA2_inputs_aggr.groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
+print(TuTuA2_inputs_by_type)
+#%%
+
+# Get SMP054 inputs and outputs:
+SMP054_inputs_neuron_df, SMP054_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                               targets=NC(type='SMP054.*'))
+SMP054_inputs_conn_df = neu.merge_neuron_properties(SMP054_inputs_neuron_df, SMP054_inputs_conn_df, ['type', 'instance'])
+#%
+SMP054_inputs_aggr = SMP054_inputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
+                                                    as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)     
+total_SMP054_inputs = SMP054_inputs_aggr['weight'].sum()
+SMP054_inputs_aggr['percent_of_total'] = SMP054_inputs_aggr['weight'] / total_SMP054_inputs
+
+SMP054_inputs_by_type = SMP054_inputs_aggr.groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
+print(SMP054_inputs_by_type.iloc[0:20])
+
+#%%
+# SMP outputs
+SMP054_outputs_neuron_df, SMP054_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type='SMP054.*'),
+                                                               targets=None)
+SMP054_outputs_conn_df = neu.merge_neuron_properties(SMP054_outputs_neuron_df, SMP054_outputs_conn_df, ['type', 'instance'])
+#%
+SMP054_outputs_aggr = SMP054_outputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],    
+                                                    as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)     
+total_SMP054_outputs = SMP054_outputs_aggr['weight'].sum()
+SMP054_outputs_aggr['percent_of_total'] = SMP054_outputs_aggr['weight'] / total_SMP054_outputs
+
+SMP054_outputs_by_type = SMP054_outputs_aggr.groupby('type_post')['percent_of_total'].sum().sort_values(ascending=False)
+print(SMP054_outputs_by_type.iloc[0:20])
+
 #%%
