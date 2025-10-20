@@ -732,6 +732,125 @@ def plot_cluster_analysis(clustered_matrix, row_linkage, col_linkage,
     
     return fig, row_clusters, col_clusters
 
+# sort index
+def sort_index(conn_matrix, conn_df=None, axis='rows', sort_by=None):
+    '''
+    Sort rows or columns of a connection matrix by weight or ROI.
+    Args:
+        conn_matrix: DataFrame, the connection matrix to sort
+        conn_df: DataFrame, the connection dataframe
+        axis: str, 'rows' or 'cols', the axis to sort
+        sort_by: str, 'weight' or 'roi', the column to sort by (or None to not sort)
+    Returns:
+        sorted_ix: list, the sorted indices
+    '''
+    if axis == 'rows':
+        summed_axis = 1 # Sum across columns, get total weight for each row
+    else:
+        summed_axis = 0 # Sum across rows, get total weight for each column 
+        
+    if sort_by == 'weight':
+        sorted_ix = conn_matrix.sum(axis=summed_axis).sort_values(ascending=False).index.tolist()
+    elif axis == 'roi':
+        assert conn_df is not None, "conn_df is required for sorting by ROI"
+        sorted_ix = conn_df.sort_values(by=sort_by).index.tolist()
+    else:
+        raise ValueError(f"Invalid sorting axis: {sort_by}")
+
+    return sorted_ix
+
+def sort_matrix_labels(conn_matrix, conn_df=None, 
+                       sort_rows=None, sort_cols=None):
+    '''
+    Sort the rows and columns of a connection matrix.
+    Args:
+        conn_matrix: DataFrame, the connection matrix to sort
+        conn_df: DataFrame, the connection dataframe
+        sort_rows: str, the column to sort rows by, or None to not sort rows
+        sort_cols: str, the column to sort columns by, or None to not sort columns
+    Returns:
+        conn_matrix: DataFrame, the sorted connection matrix
+    '''
+    sorted_rows = None
+    sorted_cols = None
+    if sort_rows is not None:
+        if isinstance(sort_rows, (list, np.ndarray)):
+            sorted_rows = sort_rows
+        else: # sort by string (column in conn_df)
+            sorted_rows = sort_index(conn_matrix, conn_df=conn_df, axis='rows', sort_by=sort_rows)
+    if sort_cols is not None:
+        if isinstance(sort_cols, (list, np.ndarray)):
+            sorted_cols = sort_cols
+        else: # sort by string (column in conn_df)  
+            sorted_cols = sort_index(conn_matrix, conn_df=conn_df, axis='cols', sort_by=sort_cols)
+        
+    conn_matrix = conn_matrix.reindex(index=sorted_rows, columns=sorted_cols)
+    
+    return conn_matrix
+
+
+def matmul_conn_matrices(conn_df1, conn_df2, weight_label='weight',
+                         sort_rows=None, sort_cols=None,
+                         conn1_pre='type_pre', conn1_post='instance_post',
+                         conn2_pre='instance_pre', conn2_post='type_post',
+                         return_all=False):
+    '''
+    Multiply two connection matrices.
+    Args:
+        conn_df1: DataFrame, the first connection dataframe
+        conn_df2: DataFrame, the second connection dataframe
+        weight_label: str, the column to use for the weight
+        sort_rows: str or list, how to sort the inputs 
+        sort_cols: str or list, how to sort the outputs
+        conn1_pre: str, the pre column for the first connection dataframe
+        conn1_post: str, the post column for the first connection dataframe
+        conn2_pre: str, the pre column for the second connection dataframe  
+        conn2_post: str, the post column for the second connection dataframe
+        return_all: bool, whether to return all three matrices
+    Returns:
+        conn_combined: DataFrame, the combined connection matrix
+    '''
+    # Get connection matrices
+    conn_matrix1 = connection_table_to_matrix(conn_df1,
+                        group_cols=[conn1_pre, conn1_post],
+                        sort_by= ['weight', 'weight'],
+                        weight_col=weight_label)
+    conn_matrix2 = connection_table_to_matrix(conn_df2,
+                        group_cols=[conn2_pre, conn2_post],
+                        sort_by= ['weight', 'weight'],
+                        weight_col=weight_label)
+    # Sort labels
+    intermediate_neurons = conn_df1[conn1_post].unique()
+    conn_matrix1 = sort_matrix_labels(conn_matrix1, conn_df=conn_df1, 
+                                       sort_rows=sort_rows, 
+                                       sort_cols=intermediate_neurons)
+    
+    conn_matrix2 = sort_matrix_labels(conn_matrix2, conn_df=conn_df2, 
+                                       sort_rows=intermediate_neurons, 
+                                       sort_cols=sort_cols)
+    conn_combined = conn_matrix1.dot(conn_matrix2)
+    if return_all:
+        return conn_matrix1, conn_matrix2, conn_combined
+    else:
+        return conn_combined
+
+def normalize_weights_by_total(conn_df, group_col='instance_post'):
+    '''
+    Normalize the weights of a connection dataframe by the total weights of a given group.
+    Args:
+        conn_df: DataFrame, the connection dataframe
+        group_col: str, the column to group by
+    Returns:
+        conn_df: DataFrame, the connection dataframe with normalized weights
+    '''
+    total_weights = conn_df.groupby(group_col, as_index=False)['weight'].sum()
+    for group_val, df_ in conn_df.groupby(group_col):
+        df_['percent_of_total'] = df_['weight'] / total_weights[total_weights[group_col]==group_val]['weight'].values[0]
+        conn_df.loc[conn_df[group_col]==group_val, 'percent_of_total'] = df_['percent_of_total']
+    return conn_df
+
+
+
 #%%
 # Load token from shell (IDE doesn't inherit .zshrc env vars)
 import subprocess
@@ -987,30 +1106,30 @@ print(sorted_TuTuA2_outputs.iloc[0:20])
 #%%
 # TuTuA_2 inputs: Aggregate all weights (aggregate across ROIs) to get total connection weights
 # ------------------------------------------------------------
-weight_type = 'percent' # can be: 'weight', 'percent', 'log'
+weight_type = 'percent_of_total' # can be: 'weight', 'percent', 'log'
 
 TuTuA2_in = TuTuA2_inputs_conn_df[(TuTuA2_inputs_conn_df['weight']>=10  )]\
                   .groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'instance_post'],
-                  as_index=False)['weight'].sum().sort_values(by='weight', ascending=False)
+                  as_index=False)['weight'].sum().sort_values(by='weight', ascending=False).copy()
+# Normalize by total weights of each post-target
+TuTuA2_in = normalize_weights_by_total(TuTuA2_in, group_col='instance_post')
+
 TuTuA2_in_conn_mat = connection_table_to_matrix(TuTuA2_in,
+                        weight_col=weight_type,
                         group_cols=['type_pre', 'instance_post'],
                         sort_by= ['weight', 'weight'])
 
-
-if weight_type == 'percent':
-    # Normalize by dividing each column in matrix by total weight of each post-target
-    TuTuA2_in_conn_mat = norm_conn_matrix_by_target_inputs(TuTuA2_in_conn_mat, TuTuA2_in, 
-                                            target='instance_post')
-    TuTuA2_in_conn_mat[TuTuA2_in_conn_mat==0] = np.nan
+if weight_type == 'percent_of_total':
+    #TuTuA2_in_conn_mat[TuTuA2_in_conn_mat==0] = np.nan
     colorbar_label = 'percent of total inputs'
     vmin = 0
-    vmax = 0.1
+    vmax = 0.5
 elif weight_type == 'log':
     TuTuA2_in_conn_mat = util.log_weights(TuTuA2_in_conn_mat)
     vmax = TuTuA2_in_conn_mat.max().max()
     vmin = TuTuA2_in_conn_mat.min().min()
     colorbar_label = 'log(weight)'
-elif weight_type == 'weight':
+else:
     TuTuA2_in_conn_mat = TuTuA2_in_conn_mat
     colorbar_label = 'weight'
     vmin=None; vmax=None;
@@ -1105,15 +1224,45 @@ fig.axes[0].set_title('TuTuA_2 inputs')
 highlight_row_or_column(fig.axes[0], plot_TuTuA2_in, row_label='SMP054',
                         color='k', linewidth=2)
 
+#%%
+# TuTuA_2: plot inputs x outputs 
+weight_label = 'percent_of_total'
+TuTuA_in_, TuTuA2_out_, TuTuA2_in_out = matmul_conn_matrices(
+                                TuTuA2_inputs_conn_df, TuTuA2_outputs_conn_df, 
+                                 weight_label='percent_of_total',
+                                 sort_rows='weight', sort_cols='weight',
+                                 conn1_pre='type_pre', conn1_post='instance_post',
+                                 conn2_pre='instance_pre', conn2_post='type_post',
+                                 return_all=True)
 
+fig, axn = plt.subplots(1, 3, figsize=(12, 4))
+plot_connection_matrix(TuTuA_in_, ax=axn[0],
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=weight_label,
+                       normalize_colors=True)
+axn[0].set_title('TuTuA_2 inputs')
+plot_connection_matrix(TuTuA2_out_, ax=axn[1],
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=weight_label,
+                       normalize_colors=True)
+axn[1].set_title('TuTuA_2 outputs')
+plot_connection_matrix(TuTuA2_in_out, ax=axn[2],
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=weight_label,
+                       normalize_colors=True)
+axn[2].set_title('TuTuA_2 inputs X outputs')
 
 #%%
-# Get all P1 types
+# Total inputs and outputs for P1_1b
 # ======================================================
 P1_types = ['P1_1b', 'P1_1a']
-P1_1_inputs_neuron_df, P1_1_inputs_conn_df = neu.fetch_adjacencies(targets=NC(type=P1_types, 
-                                            client=c))
-P1_1_inputs_conn_df = neu.merge_neuron_properties(P1_1_inputs_neuron_df, P1_1_inputs_conn_df, ['type', 'instance'])
+P1_1_inputs_neuron_df, P1_1_inputs_conn_df = neu.fetch_adjacencies(
+                                            sources=None,
+                                            targets=NC(type=P1_types), 
+                                            client=c, min_total_weight=10)
+P1_1_inputs_conn_df = neu.merge_neuron_properties(P1_1_inputs_neuron_df, 
+                                                  P1_1_inputs_conn_df, 
+                                                  ['type', 'instance'])
 #%
 # P1: Group conn_df by type_pre, and sort by sum of weight
 sorted_P1_1_inputs = P1_1_inputs_conn_df.groupby(['type_post', 
@@ -1123,7 +1272,10 @@ print('P1_1 inputs:')
 print(sorted_P1_1_inputs.iloc[0:20])
 #%
 # Get all P1 outputs
-P1_1_outputs_neuron_df, P1_1_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type=P1_types), targets=None)
+P1_1_outputs_neuron_df, P1_1_outputs_conn_df = neu.fetch_adjacencies(
+                                            sources=NC(type=P1_types), 
+                                            targets=None,
+                                            client=c, min_total_weight=10)
 P1_1_outputs_conn_df = neu.merge_neuron_properties(P1_1_outputs_neuron_df, P1_1_outputs_conn_df, ['type', 'instance'])
 #P1_1_outputs_conn_df['side'] = P1_1_outputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
 #%
@@ -1134,7 +1286,6 @@ sorted_P1_1_outputs = P1_1_outputs_conn_df.groupby(['type_post',
 sorted_P1_1b_outputs = sorted_P1_1_outputs[sorted_P1_1_outputs['type_pre']=='P1_1b']
 print('P1_1b outputs:')
 print(sorted_P1_1b_outputs.iloc[0:20])
-
 
 #%%
 # P1_1 total inputs
@@ -1149,10 +1300,107 @@ P1_1_inputs_by_type = P1_1_inputs_aggr.groupby('type_pre')['percent_of_total'].s
 P1_1a_inputs_by_type = P1_1_inputs_aggr[P1_1_inputs_aggr['type_post']=='P1_1a'].groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
 #print(P1_1a_inputs_by_type)
 P1_1b_inputs_by_type = P1_1_inputs_aggr[P1_1_inputs_aggr['type_post']=='P1_1b'].groupby('type_pre')['percent_of_total'].sum().sort_values(ascending=False)
-print(P1_1b_inputs_by_type)
+print("Top P1_1b inputs:")
+print(P1_1b_inputs_by_type.iloc[0:20])
+
+#%% P1_1 total outputs
+P1_1_outputs_aggr = P1_1_outputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
+                                                    as_index=False)['weight'].sum().sort_values(by='weight', 
+                                                                         ascending=False)     
+total_P1_1_outputs = P1_1_outputs_aggr['weight'].sum()
+P1_1_outputs_aggr['percent_of_total'] = P1_1_outputs_aggr['weight'] / total_P1_1_outputs
+
+P1_1b_outputs_by_type = P1_1_outputs_aggr[P1_1_outputs_aggr['type_pre']=='P1_1b']\
+                                .groupby('type_post')['percent_of_total']\
+                                .sum().sort_values(ascending=False)
+print("Top P1_1b outputs:")
+print(P1_1b_outputs_by_type.iloc[0:20])
 
 #%%
-# Plot connection matrix
+
+# Plot connection matrix showing inputs to P1_1b as the rows,
+# and outputs from P1_1b as the columns
+# ------------------------------------------------------------
+P1_1b_inputs_conn_df = P1_1_inputs_conn_df[P1_1_inputs_conn_df['type_post']=='P1_1b']
+P1_1b_outputs_conn_df = P1_1_outputs_conn_df[P1_1_outputs_conn_df['type_pre']=='P1_1b']
+
+# Normalize inputs by total inputs to P1_1b
+P1_1b_inputs_conn_df = normalize_weights_by_total(P1_1b_inputs_conn_df, group_col='instance_post')
+
+# Get all inputs to P1_1b outputs
+inputs_to_P1_1b_outputs_neurons, inputs_to_P1_1b_outputs_conns = neu.fetch_adjacencies(
+                                          sources=None,
+                                          targets=NC(type=P1_1b_outputs_conn_df['type_post'].unique()),
+                                          client=c, min_total_weight=10)
+inputs_to_P1_1b_outputs_conns = neu.merge_neuron_properties(inputs_to_P1_1b_outputs_neurons, 
+                                                    inputs_to_P1_1b_outputs_conns, ['type', 'instance'])
+# Normalize P1_1b outputs by total outputs they get from ALL sources
+inputs_to_P1_1b_outputs_conns = normalize_weights_by_total(inputs_to_P1_1b_outputs_conns, group_col='instance_post')
+
+# Update output conn_df with normalized weights
+P1_1b_outputs_conn_df = inputs_to_P1_1b_outputs_conns[inputs_to_P1_1b_outputs_conns['type_pre']=='P1_1b'].copy() #groupby('type_post')['weight'].sum()
+
+
+#%%
+# Combine connection matrices
+# ------------------------------------------------------------
+weight_label = 'percent_of_total';
+# P1_1b_inputs_conn = connection_table_to_matrix(P1_1b_inputs_conn_df,
+#                         group_cols=['type_pre', 'instance_post'],
+#                         sort_by= ['weight', 'weight'],
+#                         weight_col=weight_label)
+# P1_1b_outputs_conn = connection_table_to_matrix(P1_1b_outputs_conn_df,
+#                         group_cols=['instance_pre', 'type_post'],
+#                         sort_by= ['weight', 'weight'],
+#                         weight_col=weight_label)
+# # sort labels
+# intermediate_neurons = P1_1b_inputs_conn_df['instance_post'].unique()
+# P1_1b_inputs_conn = sort_matrix_labels(P1_1b_inputs_conn, conn_df=P1_1b_inputs_conn_df, 
+#                                        sort_rows='weight', sort_cols=intermediate_neurons)
+# P1_1b_outputs_conn = sort_matrix_labels(P1_1b_outputs_conn, conn_df=P1_1b_outputs_conn_df, 
+#                                        sort_rows=intermediate_neurons, sort_cols='weight')
+# # Do matrix multiplication of inputs and outputs
+# P1_in_out = P1_1b_inputs_conn.dot(P1_1b_outputs_conn)
+
+P1_1b_in, P1_1b_out, P1_in_out = matmul_conn_matrices(P1_1b_inputs_conn_df, P1_1b_outputs_conn_df, 
+                                 weight_label=weight_label,
+                                 sort_rows='weight', sort_cols='weight',
+                                 conn1_pre='type_pre', conn1_post='instance_post',
+                                 conn2_pre='instance_pre', conn2_post='type_post',
+                                 return_all=True)
+#% PLOT
+vmin = 0; vmax=0.1;
+# Make a big grid of plots using GridSpec
+fig = plt.figure(figsize=(12, 12))
+gs = fig.add_gridspec(2, 2)
+                      #width_ratios=[1, 1], height_ratios=[1, 1])
+axn = [fig.add_subplot(gs[0, 0]), 
+       fig.add_subplot(gs[0, 1]), 
+       fig.add_subplot(gs[1:, 0:])] #, fig.add_subplot(gs[1, 1])]
+plot_connection_matrix(P1_1b_in, ax=axn[0],
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=weight_label,
+                       normalize_colors=True)
+axn[0].set_title('P1_1b inputs (% of total inputs to P1_1b)')
+plot_connection_matrix(P1_1b_out, ax=axn[1],
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=weight_label,
+                       normalize_colors=True)
+axn[1].set_title('P1_1b outputs (% total inputs to targets)')
+
+axn[2].set_title('P1_1b inputs X outputs')
+plot_connection_matrix(P1_in_out, ax=axn[2],
+                       vmin=vmin, vmax=None,
+                       colorbar_label=weight_label,
+                       normalize_colors=True,
+                       show_all_row_labels=True,
+                       show_all_col_labels=True)
+axn[2].set_title('P1_1b inputs X outputs')
+
+
+#%%
+# Plot connection matrix between all P1 and all LC
+# ------------------------------------------------------------
 pre_type = 'P1'
 post_type = 'LC'
 
