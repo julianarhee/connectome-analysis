@@ -11,6 +11,7 @@
 import os
 import glob
 import numpy as np
+from numpy.ma.core import true_divide
 import pandas as pd
 import matplotlib.pyplot as plt
 #from pandas.compat import F
@@ -28,6 +29,24 @@ from scipy.spatial.distance import pdist, squareform
 
 #%%
 
+def sum_connection_matrix(conn_matrix, axis='rows'):
+    '''
+    Sum across rows or columns of a connection matrix.
+    
+    Args:
+        conn_matrix: DataFrame or numpy array, the connection matrix to sum
+        axis: str, 'rows' to sum across rows (axis=1), 'columns' to sum across columns (axis=0)
+        
+    Returns:
+        pandas Series or numpy array with summed values for each row or column
+    '''
+    if axis == 'rows':
+        return conn_matrix.sum(axis=1)
+    elif axis == 'columns':
+        return conn_matrix.sum(axis=0)
+    else:
+        raise ValueError("axis must be 'rows' or 'columns'")
+
 def plot_connection_matrix(conn_matrix, 
                            show_all_row_labels=False,
                            show_all_col_labels=False,
@@ -39,14 +58,31 @@ def plot_connection_matrix(conn_matrix,
                            grid_lw=0.5,
                            grid_color='white',
                            ax=None):
-
+    '''
+    Plot a connection matrix.
+    Args:
+        conn_matrix: DataFrame, the connection matrix to plot
+        show_all_row_labels: bool, whether to show all row labels
+        show_all_col_labels: bool, whether to show all column labels
+        normalize_colors: bool, whether to normalize the colors
+        vmin: float, the minimum value for the colorbar
+        vmax: float, the maximum value for the colorbar
+        colorbar_label: str, the label for the colorbar
+        figsize: tuple, the size of the figure
+        show_grid: bool, whether to show the grid
+        grid_lw: float, the width of the grid lines
+        grid_color: str, the color of the grid lines
+        ax: matplotlib axis, the axis to plot on
+    Returns:
+        fig: matplotlib figure, the figure with the plot
+    '''
+    n_rows = len(conn_matrix.index)
+    n_cols = len(conn_matrix.columns)
     if ax is None:
         # Auto-adjust figure size if showing all labels
         if figsize is None:
             if show_all_row_labels or show_all_col_labels:
                 # Calculate size based on number of labels
-                n_rows = len(conn_matrix.index)
-                n_cols = len(conn_matrix.columns)
                 height = max(10, n_rows * 0.3) if show_all_row_labels else 10
                 width = max(10, n_cols * 0.3) if show_all_col_labels else 10
                 figsize = (width, height)
@@ -165,13 +201,14 @@ def plot_grouped_connection_matrix(conn_matrix, conn_df,
     ax : matplotlib axis, optional
         Axis to plot on
     """
+    n_rows = len(conn_matrix.index)
+    n_cols = len(conn_matrix.columns)
+
     if ax is None:
         # Auto-adjust figure size if showing all labels
         if figsize is None:
             if show_all_row_labels or show_all_col_labels:
                 # Calculate size based on number of labels
-                n_rows = len(conn_matrix.index)
-                n_cols = len(conn_matrix.columns)
                 height = max(10, n_rows * 0.3) if show_all_row_labels else 10
                 width = max(10, n_cols * 0.3) if show_all_col_labels else 10
                 figsize = (width, height)
@@ -326,7 +363,9 @@ def plot_grouped_connection_matrix(conn_matrix, conn_df,
 
 
 def highlight_row_or_column(ax, conn_matrix, row_label=None, column_label=None, 
-                           color='white', linewidth=2, highlight_label=True, highlight_label_color='red'):
+                           color='white', linewidth=2, 
+                           highlight_label=True, highlight_label_color='red',
+                           highlight_box=True):
     """
     Draw a thin box around a specific row or column in a connection matrix plot.
     If multiple rows/columns have the same label, highlights all of them.
@@ -412,9 +451,10 @@ def highlight_row_or_column(ax, conn_matrix, row_label=None, column_label=None,
         
         # Create rectangles for all matching columns and add asterisks to labels
         for col_pos in all_col_positions:
-            rect = Rectangle((col_pos, 0), 1, len(conn_matrix.index),
-                            linewidth=linewidth, edgecolor=color, facecolor='none')
-            ax.add_patch(rect)
+            if highlight_box:
+                rect = Rectangle((col_pos, 0), 1, len(conn_matrix.index),
+                                linewidth=linewidth, edgecolor=color, facecolor='none')
+                ax.add_patch(rect)
             
             # Add asterisk to the column label if requested
             if highlight_label:
@@ -733,7 +773,8 @@ def plot_cluster_analysis(clustered_matrix, row_linkage, col_linkage,
     return fig, row_clusters, col_clusters
 
 # sort index
-def sort_index(conn_matrix, conn_df=None, axis='rows', sort_by=None):
+def sort_index(conn_matrix, conn_df=None, axis='rows', sort_by=None, sorted_var_name=None,
+               sort_weights=True, weight_var='weight'):
     '''
     Sort rows or columns of a connection matrix by weight or ROI.
     Args:
@@ -741,49 +782,81 @@ def sort_index(conn_matrix, conn_df=None, axis='rows', sort_by=None):
         conn_df: DataFrame, the connection dataframe
         axis: str, 'rows' or 'cols', the axis to sort
         sort_by: str, 'weight' or 'roi', the column to sort by (or None to not sort)
+        sorted_var_name: str, the name of the index or columns to sort, e.g., 'type_pre' (if None, 
+                     assumes conn_matrix is a hierarchical index with .index.name and .columns.name)
+        sort_weights: bool, whether to sort by weights as well (default True)
+        weight_var: str, the column to use for the weights
     Returns:
         sorted_ix: list, the sorted indices
     '''
     if axis == 'rows':
         summed_axis = 1 # Sum across columns, get total weight for each row
+        sorted_var_name = conn_matrix.index.name if sorted_var_name is None else sorted_var_name
     else:
         summed_axis = 0 # Sum across rows, get total weight for each column 
+        sorted_var_name = conn_matrix.columns.name if sorted_var_name is None else sorted_var_name
         
     if sort_by == 'weight':
         sorted_ix = conn_matrix.sum(axis=summed_axis).sort_values(ascending=False).index.tolist()
-    elif axis == 'roi':
+    else: #'roi':
         assert conn_df is not None, "conn_df is required for sorting by ROI"
-        sorted_ix = conn_df.sort_values(by=sort_by).index.tolist()
-    else:
-        raise ValueError(f"Invalid sorting axis: {sort_by}")
+        assert sort_by in conn_df.columns, f"Column {sort_by} not found in conn_df"
+        #sorted_ix = conn_df.sort_values(by=sort_by).index.tolist()
+        conn_df_info = conn_df.groupby(sorted_var_name, as_index=False)\
+                              .apply(lambda x: x[sort_by].unique()[0])\
+                              .rename(columns={None: sort_by})
+        if sort_weights:
+            assert weight_var in conn_df.columns, f"Column {weight_var} not found in conn_df"
+            conn_df_weights = conn_df.groupby(sorted_var_name, as_index=False)[weight_var].sum()#\
+                              #.sort_values(by=weight_var, ascending=False) 
+            # merge conn_df_info and conn_df_weights
+            conn_df_info = conn_df_info.merge(conn_df_weights, on=sorted_var_name, how='left')
+            # Sort by both
+            sorted_ix = conn_df_info.sort_values(by=[sort_by, weight_var],\
+                                        ascending=False)[sorted_var_name].tolist()
+        else:
+            sorted_ix = conn_df_info.sort_values(by=sort_by)[sorted_var_name].tolist()
+    #else:
+    #raise ValueError(f"Invalid sorting axis: {sort_by}")
 
     return sorted_ix
 
 def sort_matrix_labels(conn_matrix, conn_df=None, 
-                       sort_rows=None, sort_cols=None):
+                       sort_rows_by=None, sort_cols_by=None,
+                       sorted_var_name=None,
+                       sort_weights=True, weight_var='weight'):
     '''
     Sort the rows and columns of a connection matrix.
     Args:
         conn_matrix: DataFrame, the connection matrix to sort
         conn_df: DataFrame, the connection dataframe
-        sort_rows: str, the column to sort rows by, or None to not sort rows
-        sort_cols: str, the column to sort columns by, or None to not sort columns
+        sort_rows_by: str, the column to sort rows by, or None to not sort rows
+        sort_cols_by: str, the column to sort columns by, or None to not sort columns
+        sort_weights: bool, whether to sort by weights as well
+        weight_var: str, the column to use for the weights
     Returns:
         conn_matrix: DataFrame, the sorted connection matrix
     '''
     sorted_rows = None
     sorted_cols = None
-    if sort_rows is not None:
-        if isinstance(sort_rows, (list, np.ndarray)):
-            sorted_rows = sort_rows
+    if sort_rows_by is not None:
+        if isinstance(sort_rows_by, (list, np.ndarray)):
+            sorted_rows = sort_rows_by
         else: # sort by string (column in conn_df)
-            sorted_rows = sort_index(conn_matrix, conn_df=conn_df, axis='rows', sort_by=sort_rows)
-    if sort_cols is not None:
-        if isinstance(sort_cols, (list, np.ndarray)):
-            sorted_cols = sort_cols
+            sorted_rows = sort_index(conn_matrix, conn_df=conn_df, 
+                                     axis='rows', sort_by=sort_rows_by, 
+                                     sorted_var_name=sorted_var_name,
+                                     sort_weights=sort_weights, weight_var=weight_var)
+        assert len(sorted_rows) == conn_matrix.shape[0], "Number of sorted rows does not match number of rows in conn_matrix"
+    if sort_cols_by is not None:
+        if isinstance(sort_cols_by, (list, np.ndarray)):
+            sorted_cols = sort_cols_by
         else: # sort by string (column in conn_df)  
-            sorted_cols = sort_index(conn_matrix, conn_df=conn_df, axis='cols', sort_by=sort_cols)
-        
+            sorted_cols = sort_index(conn_matrix, conn_df=conn_df, 
+                                     axis='cols', sort_by=sort_cols_by,
+                                     sorted_var_name=sorted_var_name,
+                                     sort_weights=sort_weights, weight_var=weight_var)
+        assert len(sorted_cols) == conn_matrix.shape[1], "Number of sorted columns does not match number of columns in conn_matrix"
     conn_matrix = conn_matrix.reindex(index=sorted_rows, columns=sorted_cols)
     
     return conn_matrix
@@ -822,21 +895,22 @@ def matmul_conn_matrices(conn_df1, conn_df2, weight_label='weight',
     # Sort labels
     intermediate_neurons = conn_df1[conn1_post].unique()
     conn_matrix1 = sort_matrix_labels(conn_matrix1, conn_df=conn_df1, 
-                                       sort_rows=sort_rows, 
-                                       sort_cols=intermediate_neurons)
+                                       sort_rows_by=sort_rows, 
+                                       sort_cols_by=intermediate_neurons)
     
     conn_matrix2 = sort_matrix_labels(conn_matrix2, conn_df=conn_df2, 
-                                       sort_rows=intermediate_neurons, 
-                                       sort_cols=sort_cols)
+                                       sort_rows_by=intermediate_neurons, 
+                                       sort_cols_by=sort_cols)
     conn_combined = conn_matrix1.dot(conn_matrix2)
     if return_all:
         return conn_matrix1, conn_matrix2, conn_combined
     else:
         return conn_combined
 
-def normalize_weights_by_total(conn_df, group_col='instance_post'):
+def norm_by_total_inputs(conn_df, group_col='instance_post'):
     '''
     Normalize the weights of a connection dataframe by the total weights of a given group.
+    Assumes that ALL inputs to a given target are included in conn_df.
     Args:
         conn_df: DataFrame, the connection dataframe
         group_col: str, the column to group by
@@ -849,6 +923,55 @@ def normalize_weights_by_total(conn_df, group_col='instance_post'):
         conn_df.loc[conn_df[group_col]==group_val, 'percent_of_total'] = df_['percent_of_total']
     return conn_df
 
+def extract_side_from_conn_df(conn_df):
+    '''
+    Extract the side from the instance column and the ROI without the side from the roi column.
+    Args:
+        conn_df: DataFrame, the connection dataframe
+    Returns:
+        conn_df: DataFrame, the connection dataframe with the side and ROI without the side columns
+    '''
+    # Handle None/NaN values in instance columns
+    conn_df['side_pre'] = conn_df['instance_pre'].apply(lambda x: x.split('_')[-1] if pd.notna(x) and x is not None else None)
+    conn_df['side_post'] = conn_df['instance_post'].apply(lambda x: x.split('_')[-1] if pd.notna(x) and x is not None else None)
+    conn_df['roi_noside'] = conn_df['roi'].str.extract(r'^(.*)\(.*\)', expand=False)
+    return conn_df
+
+def get_and_norm_by_total_inputs(conn_df, normalize_group_col='instance_post',
+                                 groupby_type=False):
+    '''
+    Normalize inputs to target types by total inputs to target types. 
+    Fetches all sources to conn_df['type_post'] types, normalizes by total inputs to target types,
+    and returns the subset of connections between source and target types.
+    Args:
+        conn_df: DataFrame, the connection dataframe
+        normalize_group_col: str, the column to normalize by (default: 'instance_post'), 
+        which means that total inputs for each instance_post is used to normalize the weights.
+    Returns:
+        normalized_output_conn_df: DataFrame, the normalized connection dataframe
+    '''
+    src_types = conn_df['type_pre'].unique() # source types
+    target_types = conn_df['type_post'].unique()
+    # Get all inputs to target types
+    inputs_to_target_neurons, inputs_to_target_conns = neu.fetch_adjacencies(
+                                          sources=None,
+                                          targets=NC(type=target_types),
+                                          client=c, min_total_weight=10)
+    inputs_to_target_conns = neu.merge_neuron_properties(inputs_to_target_neurons, 
+                                        inputs_to_target_conns, ['type', 'instance'])
+
+    groupby_type = normalize_group_col == 'type_post'         
+    if groupby_type:
+        inputs_to_target_conns = inputs_to_target_conns.groupby(['type_pre', 'type_post'], as_index=False)['weight'].sum()
+        assert normalize_group_col == 'type_post', "normalize_group_col must be 'type_post' when groupby_type is True"
+        
+    inputs_to_target_conns = norm_by_total_inputs(inputs_to_target_conns, 
+                                                           group_col=normalize_group_col)
+    # Select subset of connections between source and target types
+    normalized_output_conn_df = inputs_to_target_conns[\
+                                        inputs_to_target_conns['type_pre'].isin(src_types)].copy()
+    
+    return normalized_output_conn_df
 
 
 #%%
@@ -884,7 +1007,9 @@ min_total_weight = 10
 LC10a_inputs_neuron_df, LC10a_inputs_conn_df = neu.fetch_adjacencies(targets=NC(type=['LC10a']),
                                                 min_total_weight=min_total_weight)
 LC10a_inputs_conn_df = neu.merge_neuron_properties(LC10a_inputs_neuron_df, LC10a_inputs_conn_df, ['type', 'instance'])
-LC10a_inputs_conn_df['side'] = LC10a_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
+# Extract side from roi
+LC10a_inputs_conn_df = extract_side_from_conn_df(LC10a_inputs_conn_df)
+#LC10a_inputs_conn_df['side'] = LC10a_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
 # Remove side from roi
 LC10a_inputs_conn_df['roi_noside'] = LC10a_inputs_conn_df['roi'].str.extract(r'^(.*)\(.*\)', expand=False)
 
@@ -916,30 +1041,74 @@ print(sorted_LC10a_outputs.iloc[0:20])
 
                           
 #%%
-
-# Show Connection Matrix for LC10a
-separate_by_side = True
+# Show Connection Matrix for LC10a INPUTS
+separate_by_side = False
+sort_by_weights_only = False
 use_log_weights = True
+weight_type = 'weight'
 
-pre_variable = 'type_pre'
 post_variable = 'bodyId_post'
+if separate_by_side:
+    pre_variable = 'instance_pre'
+    pre_grouper = 'side_pre'
+    post_grouper = 'side_post'
+    highlight_rows = ['TuTuA_2_L', 'TuTuA_2_R']
+elif sort_by_weights_only:
+    pre_variable = 'type_pre'
+    pre_grouper = weight_type
+    post_grouper = weight_type
+    highlight_rows = ['TuTuA_2']
+else:
+    pre_variable = 'type_pre'
+    pre_grouper = 'roi_noside'
+    post_grouper = 'roi_noside'
+    highlight_rows = ['TuTuA_2']
+    
+# Add any missing columns
+def group_conn_df(conn_df, pre_variable='type_pre', post_variable='type_post', 
+                  pre_grouper='roi_noside', post_grouper='roi_noside', weight_type='weight'):
+    '''
+    Group a connection dataframe by a given variable and sort by the weights.
+    Args:
+        conn_df: DataFrame, the connection dataframe
+        pre_variable: str, the column to group by for the rows
+        post_variable: str, the column to group by for the columns
+        pre_grouper: str, the column to sort the rows by
+        post_grouper: str, the column to sort the columns by
+        weight_type: str, the column to use for the weights
+    Returns:
+        conn_df: DataFrame, the grouped connection dataframe
+    '''
+    
+    group_cols = ['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post']
+    for col in [pre_variable, post_variable, pre_grouper, post_grouper]:
+        if col not in group_cols:
+            group_cols.append(col)
+        
+    # Get grouped connections df
+    conn_ = conn_df.groupby(group_cols,
+                as_index=False)[weight_type].sum().sort_values(by=weight_type, ascending=False)
+    
+    return conn_
 
-sorted_by_grouper = True 
-pre_grouper = 'roi_noside'
-post_grouper = 'type_post'
-LC10a_in = LC10a_inputs_conn_df[LC10a_inputs_conn_df['side']=='R'].copy()
+# Group conn df
+LC10a_in = group_conn_df(LC10a_inputs_conn_df, pre_variable=pre_variable, post_variable=post_variable, 
+                         pre_grouper=pre_grouper, post_grouper=post_grouper, weight_type=weight_type)
 
+# Connection mat
 LC10a_in_conn_matrix = connection_table_to_matrix(LC10a_in,
                         group_cols=[pre_variable, post_variable],
-                        sort_by= [ pre_grouper, post_grouper]) #, 'bodyId', sort_by='instance')
-                    
-if not sorted_by_grouper:
-    # Sort by weight
-    assert pre_variable == 'type_pre'
-    sorted_in= LC10a_in.groupby([pre_variable])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-    LC10a_in_conn_matrix = LC10a_in_conn_matrix.loc[sorted_in[pre_variable].values]
-    #LC10a_in_conn_matrix = LC10a_in_conn_matrix[sorted_in['type_post'].values] 
-
+                        sort_by= [ pre_grouper, post_grouper])
+print(LC10a_in_conn_matrix.shape)
+#%
+# sort index
+LC10a_in_conn_matrix = sort_matrix_labels(LC10a_in_conn_matrix, 
+                                          conn_df=LC10a_in,  
+                                          sort_rows_by=pre_grouper,
+                                          sort_cols_by=post_grouper,
+                                          sorted_var_name=None,
+                                          weight_var=weight_type)
+#%
 # ROI colors
 n_pre_groups = len(LC10a_in[pre_grouper].unique())
 n_post_groups = len(LC10a_in[post_grouper].unique())
@@ -951,103 +1120,60 @@ post_grouper_dict = {roi: sns.color_palette("colorblind", n_post_groups)[i]
 # Plot LC10a inputs - annotate rows (pre/inputs)
 if use_log_weights:
     LC10a_conn = util.log_weights(LC10a_in_conn_matrix)
-    colorbar_label = 'log(weight)'
+    colorbar_label = f'log({weight_type})'
 else:
     LC10a_conn = LC10a_in_conn_matrix
-    colorbar_label = 'weight'
-fig = plot_grouped_connection_matrix(LC10a_conn, LC10a_in, 
+    colorbar_label = weight_type
+fig = plot_grouped_connection_matrix(LC10a_conn, LC10a_in, figsize=(12,12),
                                      pre_grouper_dict=pre_grouper_dict,
                                      post_grouper_dict=post_grouper_dict,
                                      group_per_row=None,
                                      group_per_col=None,
                                      pre_grouper = pre_grouper,
                                      post_grouper = post_grouper,
-                                     sorted_by_grouper=sorted_by_grouper,
+                                     sorted_by_grouper=sort_by_weights_only==False,
                                      pre_variable=pre_variable,
                                      post_variable=post_variable,
-                                     annotate_rows=True,
-                                     annotate_cols=True,
+                                     annotate_rows=sort_by_weights_only==False,
+                                     annotate_cols=sort_by_weights_only==False,
                                      show_all_row_labels=True,
                                      show_all_col_labels=False,
-                                     colorbar_label='log(weight)')
+                                     colorbar_label=colorbar_label)
 fig.axes[0].set_title('LC10a inputs')
 
-highlight_row_or_column(fig.axes[0], LC10a_conn, row_label='TuTuA_2',
+highlight_row_or_column(fig.axes[0], LC10a_conn, row_label=highlight_rows,
                         color='k', linewidth=2)
-
-#%%
-# LC10 inputs: aggregate side and ROI
-separate_by_side = False
-#use_log_weights = True
-weight_type = 'percent' # can be: 'log', 'percent', 'weight'
-
-pre_variable = 'type_pre'
-post_variable = 'bodyId_post'
-sorted_by_grouper = False
-pre_grouper = 'type_pre'
-post_grouper = 'type_post'
-LC10a_in = LC10a_inputs_conn_df.groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post'],
-                                as_index=False)['weight'].sum().sort_values(by='weight', ascending=False)
-
-LC10a_in_conn_matrix = connection_table_to_matrix(LC10a_in,
-                        group_cols=[pre_variable, post_variable],
-                        sort_by= [ pre_grouper, post_grouper]) #, 'bodyId', sort_by='instance')
-                    
-if not sorted_by_grouper:
-    # Sort by weight
-    assert pre_variable == 'type_pre'
-    sorted_in= LC10a_in.groupby([pre_variable])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-    LC10a_in_conn_matrix = LC10a_in_conn_matrix.loc[sorted_in[pre_variable].values]
-    #LC10a_in_conn_matrix = LC10a_in_conn_matrix[sorted_in['type_post'].values] 
-
-# Plot LC10a inputs - annotate rows (pre/inputs)
-vmin=None; vmax=None;
-if weight_type == 'log':
-    LC10a_conn = util.log_weights(LC10a_in_conn_matrix)
-    colorbar_label = 'log(weight)'
-elif weight_type == 'percent':
-    LC10a_conn = norm_conn_matrix_by_target_inputs(LC10a_in_conn_matrix, LC10a_in, 
-                                                  target='bodyId_post')
-    LC10a_conn[LC10a_conn==0] = np.nan
-    colorbar_label = 'percent of total inputs'
-    vmin = 0
-    vmax = 0.1
-else:
-    LC10a_conn = LC10a_in_conn_matrix
-    colorbar_label = 'weight'
-
-fig, ax = plt.subplots(figsize=(12, 10))
-fig = plot_connection_matrix(LC10a_conn, ax=ax,
-                             vmin=vmin, vmax=vmax,
-                             show_all_row_labels=True,
-                             show_all_col_labels=False,
-                             colorbar_label=colorbar_label,
-                             normalize_colors=True)
-ax.set_title('LC10a inputs')
-
 
 #%%
 # LC10a OUTPUTS: 
 pre_variable = 'bodyId_pre'
 post_variable = 'type_post'
 
-sorted_by_grouper = False
-pre_grouper = 'roi_noside'
-post_grouper = 'roi_noside'
-               
-# Get conn matrix                    
-LC10a_out = LC10a_outputs_conn_df[LC10a_outputs_conn_df['side']=='R'].copy()
+sort_by_weights_only=False
+
+if sort_by_weights_only:
+    pre_grouper = weight_type
+    post_grouper = weight_type
+else:
+    pre_grouper = 'roi_noside'
+    post_grouper = 'roi_noside'
+# Get conn matrix       
+LC10a_out = group_conn_df(LC10a_outputs_conn_df, pre_variable=pre_variable, post_variable=post_variable, 
+                    pre_grouper=pre_grouper, post_grouper=post_grouper, weight_type=weight_type)
 LC10a_out_conn_matrix = connection_table_to_matrix(LC10a_out,
                         group_cols=['bodyId_pre', 'type_post'],
                         sort_by= ['weight', post_grouper])#'weight']) #, 'bodyId', sort_by='instance')    
-if not sorted_by_grouper:
-    # Sort by weight
-    sorted_out = LC10a_out.groupby(['type_post'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-    LC10a_out_conn_matrix = LC10a_out_conn_matrix[sorted_out['type_post'].values]
+# Sort index
+LC10a_out_conn_matrix = sort_matrix_labels(LC10a_out_conn_matrix, 
+                                          conn_df=LC10a_out,  
+                                          sort_rows_by=pre_grouper,
+                                          sort_cols_by=post_grouper,
+                                          sorted_var_name=None,
+                                          weight_var=weight_type)
 
 # Colormap
 post_grouper_dict = {roi: sns.color_palette("tab10")[i] 
-                    for i, roi in enumerate(LC10a_out['roi_noside'].unique())}
+                    for i, roi in enumerate(LC10a_out[post_grouper].unique())}
 
 # Plot LC10a outputs - annotate columns (post/outputs)
 log_LC10a_out = np.log(LC10a_out_conn_matrix)
@@ -1058,7 +1184,7 @@ log_LC10a_out = log_LC10a_out.replace(-np.inf, np.nan)
 fig = plot_grouped_connection_matrix(log_LC10a_out, 
                                      LC10a_out, 
                                      post_grouper_dict=post_grouper_dict,
-                                     sorted_by_grouper=sorted_by_grouper,
+                                     sorted_by_grouper=sort_by_weights_only==False,
                                      pre_grouper = pre_grouper,
                                      post_grouper = post_grouper,
                                      pre_variable=pre_variable,
@@ -1074,50 +1200,101 @@ highlight_row_or_column(fig.axes[0], log_LC10a_out,
                         column_label=['AOTU019', 'AOTU025', 'P1_1b'],
                         color='k', linewidth=2)
 
+#%%
+# Get percent of total weights for IN
+LC10a_inputs_conn_df = norm_by_total_inputs(LC10a_inputs_conn_df, group_col='bodyId_post')
+LC10a_outputs_conn_df = get_and_norm_by_total_inputs(LC10a_outputs_conn_df, 
+                                                     normalize_group_col='type_post')
+
+#%%
+# LC10a:  Plot IN x OUT
+plot_inputs = True
+vmin = 0
+vmax = 0.1
+LC10a_in_, LC10a_out_, LC10a_in_out = matmul_conn_matrices(
+                                LC10a_inputs_conn_df, LC10a_outputs_conn_df, 
+                                 weight_label='percent_of_total',
+                                 sort_rows='weight', sort_cols='weight',
+                                 conn1_pre='type_pre', conn1_post='bodyId_post',
+                                 conn2_pre='bodyId_pre', conn2_post='type_post',
+                                 return_all=True)
+if plot_inputs:
+    fig, ax = plt.subplots(figsize=(25, 10))
+    plot_connection_matrix(LC10a_in_, ax=ax,  
+                        show_all_row_labels=True, show_all_col_labels=True,
+                        vmin=vmin, vmax=vmax,
+                        colorbar_label='% total inputs')
+    ax.set_title('LC10a inputs')
+
+    fig, ax = plt.subplots(figsize=(15, 25))
+    plot_connection_matrix(LC10a_out_, ax=ax, 
+                        show_all_row_labels=True, show_all_col_labels=True, 
+                        vmin=vmin, vmax=vmax,
+                        colorbar_label='% total outputs')
+    ax.set_title('LC10a outputs')
+
+fig, ax = plt.subplots(figsize=(20, 10))
+plot_connection_matrix(LC10a_in_out, ax=ax, 
+                       vmin=vmin, vmax=vmax,
+                       show_all_row_labels=True,
+                       show_all_col_labels=True, 
+                       colorbar_label='% total inputs * outputs')
+ax.set_title('LC10a inputs * outputs')
+plt.show()
+
 
 # %%
 # Get all TuTuA_2 neurons
 # ======================================================
 TuTuA2_neurons, TuTuA2_roi_counts = neu.fetch_neurons(NC(type='TuTuA_2', 
                                                          client=c))
-#%
+#%%
 # Get all inputs
-TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df = neu.fetch_adjacencies(sources=None,
-                                                                       targets=NC(type=['TuTuA_2']))
+TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df = neu.fetch_adjacencies(
+                                                                sources=None,
+                                                                targets=NC(type=['TuTuA_2']),
+                                                                min_total_weight=10)
 TuTuA2_inputs_conn_df = neu.merge_neuron_properties(TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df, ['type', 'instance'])
-TuTuA2_inputs_conn_df['side'] = TuTuA2_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
-# 
+# Extract side info
+TuTuA2_inputs_conn_df = extract_side_from_conn_df(TuTuA2_inputs_conn_df)
+# Add percent of total weight: group_col should result in all total weights for that group 
+# summing to 1. To make it sum to 1 by type_pre, group by type_post?
+TuTuA2_inputs_conn_df = norm_by_total_inputs(TuTuA2_inputs_conn_df, 
+                                                   group_col='instance_post')
+
 # TuTuA_2: Group conn_df by type_pre, and sort by sum of weight
-sorted_TuTuA2_inputs = TuTuA2_inputs_conn_df.groupby(['roi', 'type_pre', 'side'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
+sorted_TuTuA2_inputs = TuTuA2_inputs_conn_df.groupby(['roi', 'type_pre', 'side_pre', 'side_post'], \
+                                            as_index=False)['percent_of_total'].sum()\
+                                            .sort_values(by=['percent_of_total', 'percent_of_total'], 
+                                            ascending=False)
 print('TuTuA_2 inputs:')
 print(sorted_TuTuA2_inputs.iloc[0:20])
 
-#%
+#%%
 # Get all outputs
-TuTuA2_outputs_neuron_df, TuTuA2_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type=['TuTuA_2']), targets=None)
+TuTuA2_outputs_neuron_df, TuTuA2_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type=['TuTuA_2']), 
+                                                                         targets=None,
+                                                                         min_total_weight=10)
 TuTuA2_outputs_conn_df = neu.merge_neuron_properties(TuTuA2_outputs_neuron_df, TuTuA2_outputs_conn_df, ['type', 'instance'])
-TuTuA2_outputs_conn_df['side'] = TuTuA2_outputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
-#
-# TuTuA_2: Group conn_df by type_post, and sort by sum of weight
-sorted_TuTuA2_outputs = TuTuA2_outputs_conn_df.groupby(['roi', 'type_post', 'side'])['weight'].sum().reset_index().sort_values(by='weight', ascending=False)
-print('TuTuA_2 outputs:')
-print(sorted_TuTuA2_outputs.iloc[0:20])
+# Extract side info
+TuTuA2_outputs_conn_df = extract_side_from_conn_df(TuTuA2_outputs_conn_df)
+# Add percent of total weight
+TuTuA2_outputs_conn_df = get_and_norm_by_total_inputs(TuTuA2_outputs_conn_df, 
+                                                    normalize_group_col='type_post')
 
 #%%
 # TuTuA_2 inputs: Aggregate all weights (aggregate across ROIs) to get total connection weights
 # ------------------------------------------------------------
 weight_type = 'percent_of_total' # can be: 'weight', 'percent', 'log'
 
-TuTuA2_in = TuTuA2_inputs_conn_df[(TuTuA2_inputs_conn_df['weight']>=10  )]\
+TuTuA2_in = TuTuA2_inputs_conn_df\
                   .groupby(['bodyId_pre', 'bodyId_post', 'type_pre', 'instance_post'],
-                  as_index=False)['weight'].sum().sort_values(by='weight', ascending=False).copy()
-# Normalize by total weights of each post-target
-TuTuA2_in = normalize_weights_by_total(TuTuA2_in, group_col='instance_post')
-
+                  as_index=False)['percent_of_total'].sum().sort_values(by='percent_of_total', ascending=False).copy()
+# Make conn mat
 TuTuA2_in_conn_mat = connection_table_to_matrix(TuTuA2_in,
                         weight_col=weight_type,
                         group_cols=['type_pre', 'instance_post'],
-                        sort_by= ['weight', 'weight'])
+                        sort_by= [weight_type, weight_type])
 
 if weight_type == 'percent_of_total':
     #TuTuA2_in_conn_mat[TuTuA2_in_conn_mat==0] = np.nan
@@ -1150,34 +1327,32 @@ plt.show()
 # Plot TuTuA_2 inputs: Separate by ROI/side
 # ------------------------------------------------------------
 sort_weights = False #True
-plot_by_side = False
+plot_by_side = True
+weight_type = 'percent_of_total'
 use_log_weights = True
 
 if plot_by_side:
     pre_variable = 'instance_pre'
-    pre_grouper = 'side' 
+    pre_grouper = 'side_pre' 
     sorted_by_grouper = True 
     sort_weights = False
+    post_grouper = 'side_post'
 else:
     pre_variable = 'type_pre'    
     pre_grouper = 'roi_noside'
     sorted_by_grouper = sort_weights is False
-
+    post_grouper = 'roi_noside'
 post_variable = 'instance_post'
 manual_groups = sorted_by_grouper #False
-post_grouper = 'roi_noside' #'type_post'
+
 # --------
-TuTuA2_inputs_conn_df['roi_noside'] = TuTuA2_inputs_conn_df['roi'].str.extract(r'^(.*)\(.*\)', expand=False)
-TuTuA2_in = TuTuA2_inputs_conn_df[#(TuTuA2_inputs_conn_df['side']=='R')
-                            (TuTuA2_inputs_conn_df['weight']>=10)].copy()
-#%
-TuTuA2_in_conn_matrix = connection_table_to_matrix(TuTuA2_in,
+TuTuA2_in_conn_matrix = connection_table_to_matrix(TuTuA2_inputs_conn_df,
                         group_cols=[pre_variable, post_variable],
                         sort_by= [ pre_grouper, post_grouper]) #'weight']) 
 
 if manual_groups: #sorted_by_grouper:
     in_vals = TuTuA2_in_conn_matrix.index.tolist()
-    sort_by_roi = TuTuA2_in[[pre_variable, pre_grouper]]\
+    sort_by_roi = TuTuA2_inputs_conn_df[[pre_variable, pre_grouper]]\
                             .drop_duplicates()\
                             .sort_values(by=pre_grouper)
     TuTuA2_in_conn_matrix = TuTuA2_in_conn_matrix.loc[sort_by_roi[pre_variable].values]
@@ -1186,25 +1361,25 @@ else:
     group_per_row = None
 
     # Sort by weight
-    sorted_TuTuA2_inputs = TuTuA2_in.groupby([ pre_variable, pre_grouper])['weight'].sum().reset_index().sort_values(by=['weight'], ascending=False)
-    sorted_TuTuA2_inputs = TuTuA2_in.groupby(['type_pre'])['weight'].sum().reset_index().sort_values(by=['weight'], ascending=False)
+    sorted_TuTuA2_inputs = TuTuA2_in.groupby([ pre_variable, pre_grouper])[weight_type].sum().reset_index().sort_values(by=[weight_type], ascending=False)
+    sorted_TuTuA2_inputs = TuTuA2_in.groupby(['type_pre'])[weight_type].sum().reset_index().sort_values(by=[weight_type], ascending=False)
     TuTuA2_in_conn_matrix = TuTuA2_in_conn_matrix.loc[sorted_TuTuA2_inputs['type_pre'].values]
 
 # ROI colors
 pre_grouper_dict = {roi: sns.color_palette("tab10")[i] 
-                    for i, roi in enumerate(TuTuA2_in[pre_grouper].unique())}
+                    for i, roi in enumerate(TuTuA2_inputs_conn_df[pre_grouper].unique())}
 post_grouper_dict = {roi: sns.color_palette("tab10")[i] 
-                    for i, roi in enumerate(TuTuA2_in[post_grouper].unique())}
+                    for i, roi in enumerate(TuTuA2_inputs_conn_df[post_grouper].unique())}
 
 #% Plot TuTuA_2 inputs
 if use_log_weights:
     plot_TuTuA2_in = util.log_weights(TuTuA2_in_conn_matrix)
-    colorbar_label = 'log(weight)'
+    colorbar_label = f'log({weight_type})'
 else:
     plot_TuTuA2_in = TuTuA2_in_conn_matrix
     colorbar_label = 'weight'
 
-fig = plot_grouped_connection_matrix(plot_TuTuA2_in, TuTuA2_in, 
+fig = plot_grouped_connection_matrix(plot_TuTuA2_in, TuTuA2_inputs_conn_df, 
                                      pre_grouper_dict=pre_grouper_dict,
                                      post_grouper_dict=post_grouper_dict,
                                      pre_grouper = pre_grouper,
@@ -1221,8 +1396,8 @@ fig = plot_grouped_connection_matrix(plot_TuTuA2_in, TuTuA2_in,
 fig.axes[0].set_title('TuTuA_2 inputs')
 
 # Highlight
-highlight_row_or_column(fig.axes[0], plot_TuTuA2_in, row_label='SMP054',
-                        color='k', linewidth=2)
+highlight_row_or_column(fig.axes[0], plot_TuTuA2_in, row_label=['SMP054_L', 'SMP054_R'],
+                        color='k', linewidth=2, highlight_box=False)
 
 #%%
 # TuTuA_2: plot inputs x outputs 
@@ -1234,7 +1409,8 @@ TuTuA_in_, TuTuA2_out_, TuTuA2_in_out = matmul_conn_matrices(
                                  conn1_pre='type_pre', conn1_post='instance_post',
                                  conn2_pre='instance_pre', conn2_post='type_post',
                                  return_all=True)
-
+#%
+vmax=0.2
 fig, axn = plt.subplots(1, 3, figsize=(12, 4))
 plot_connection_matrix(TuTuA_in_, ax=axn[0],
                        vmin=vmin, vmax=vmax,
@@ -1325,21 +1501,24 @@ P1_1b_inputs_conn_df = P1_1_inputs_conn_df[P1_1_inputs_conn_df['type_post']=='P1
 P1_1b_outputs_conn_df = P1_1_outputs_conn_df[P1_1_outputs_conn_df['type_pre']=='P1_1b']
 
 # Normalize inputs by total inputs to P1_1b
-P1_1b_inputs_conn_df = normalize_weights_by_total(P1_1b_inputs_conn_df, group_col='instance_post')
+P1_1b_inputs_conn_df = norm_by_total_inputs(P1_1b_inputs_conn_df, group_col='instance_post')
 
 # Get all inputs to P1_1b outputs
-inputs_to_P1_1b_outputs_neurons, inputs_to_P1_1b_outputs_conns = neu.fetch_adjacencies(
-                                          sources=None,
-                                          targets=NC(type=P1_1b_outputs_conn_df['type_post'].unique()),
-                                          client=c, min_total_weight=10)
-inputs_to_P1_1b_outputs_conns = neu.merge_neuron_properties(inputs_to_P1_1b_outputs_neurons, 
-                                                    inputs_to_P1_1b_outputs_conns, ['type', 'instance'])
-# Normalize P1_1b outputs by total outputs they get from ALL sources
-inputs_to_P1_1b_outputs_conns = normalize_weights_by_total(inputs_to_P1_1b_outputs_conns, group_col='instance_post')
+P1_1b_outputs_conn_df = get_and_norm_by_total_inputs(P1_1b_outputs_conn_df)
 
-# Update output conn_df with normalized weights
-P1_1b_outputs_conn_df = inputs_to_P1_1b_outputs_conns[inputs_to_P1_1b_outputs_conns['type_pre']=='P1_1b'].copy() #groupby('type_post')['weight'].sum()
-
+# inputs_to_P1_1b_outputs_neurons, inputs_to_P1_1b_outputs_conns = neu.fetch_adjacencies(
+#                                           sources=None,
+#                                           targets=NC(type=P1_1b_outputs_conn_df['type_post'].unique()),
+#                                           client=c, min_total_weight=10)
+# inputs_to_P1_1b_outputs_conns = neu.merge_neuron_properties(inputs_to_P1_1b_outputs_neurons, 
+#                                                     inputs_to_P1_1b_outputs_conns, ['type', 'instance'])
+# # Normalize P1_1b outputs by total outputs they get from ALL sources
+# inputs_to_P1_1b_outputs_conns = normalize_weights_by_total(inputs_to_P1_1b_outputs_conns, 
+#                                                            group_col='instance_post')
+# 
+# # Update output conn_df with normalized weights
+# P1_1b_outputs_conn_df = inputs_to_P1_1b_outputs_conns[inputs_to_P1_1b_outputs_conns['type_pre']=='P1_1b'].copy() #groupby('type_post')['weight'].sum()
+ 
 
 #%%
 # Combine connection matrices
@@ -1452,69 +1631,57 @@ ax.set_xlabel('Post-synaptic {} type'.format(post_type))
 ax.set_ylabel('Pre-synaptic {} type'.format(pre_type))
 
 #%%
-# Get all P1 INPUTS:
-P1_inputs_neuron_df, P1_inputs_conn_df = neu.fetch_adjacencies(sources=None,
-                                                               targets=NC(type='P1.*'))
-P1_inputs_conn_df = neu.merge_neuron_properties(P1_inputs_neuron_df, P1_inputs_conn_df, ['type', 'instance'])
-#P1_inputs_conn_df['side'] = P1_inputs_conn_df['roi'].str.extract(r'\(([LR])\)', expand=False)
 
-# Group by type_pre and divide its weight onto a given type_post by dividing by the total weights onto that type_post
-total_P1_inputs = P1_inputs_conn_df.groupby('type_post', as_index=False)['weight'].sum()
-for type_post, df_ in P1_inputs_conn_df.groupby('type_post'):
-    df_['percent_of_total'] = df_['weight'] / total_P1_inputs[total_P1_inputs['type_post']==type_post]['weight'].values[0]
-    P1_inputs_conn_df.loc[P1_inputs_conn_df['type_post']==type_post, 'percent_of_total'] = df_['percent_of_total']
-#%
-# P1: Group conn_df by type_pre, and sort by sum of weight
-sorted_P1_inputs = P1_inputs_conn_df.groupby(['type_post', 'type_pre'],
-                                               as_index=False)['percent_of_total'].sum().sort_values(by='percent_of_total', ascending=False)
-print('P1inputs:')
-print(sorted_P1_inputs.iloc[0:20])
+# Get all P1 INPUTS:
+# ------------------------------------------------------------
+P1_inputs_neuron_df, P1_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                               targets=NC(type='P1.*'),
+                                                               min_total_weight=10)
+P1_inputs_conn_df = neu.merge_neuron_properties(P1_inputs_neuron_df, P1_inputs_conn_df, ['type', 'instance'])
+P1_inputs_conn_df = extract_side_from_conn_df(P1_inputs_conn_df)
+
+# Group across side
+P1_inputs = P1_inputs_conn_df.groupby(['type_pre', 'type_post'], \
+                                        as_index=False)['weight'].sum()
+
+# Normalize by total inputs to each target type
+P1_inputs = norm_by_total_inputs(P1_inputs, group_col='type_post')
+
 #%%
 # Get ALL P1 OUTPUTS:
 # ------------------------------------------------------------
 P1_outputs_neuron_df, P1_outputs_conn_df = neu.fetch_adjacencies(sources=NC(type='P1.*'), 
                                                                  targets=None)
 P1_outputs_conn_df = neu.merge_neuron_properties(P1_outputs_neuron_df, P1_outputs_conn_df, ['type', 'instance'])
-
-# Out of all the outputs a given P1 type makes, what percent goes to a given target
-total_P1_outputs = P1_outputs_conn_df.groupby('type_pre', as_index=False)['weight'].sum()
-for type_pre, df_ in P1_outputs_conn_df.groupby('type_pre'):
-    df_['percent_of_total'] = df_['weight'] / total_P1_outputs[total_P1_outputs['type_pre']==type_pre]['weight'].values[0]
-    P1_outputs_conn_df.loc[P1_outputs_conn_df['type_pre']==type_pre, 'percent_of_total'] = df_['percent_of_total']
+P1_outputs_conn_df = extract_side_from_conn_df(P1_outputs_conn_df)
 #%
-# P1_1: Group conn_df by type_post, and sort by sum of weight
-sorted_P1_outputs = P1_outputs_conn_df.groupby(['type_pre', 'type_post'],
-                                               as_index=False)['percent_of_total'].sum().sort_values(by='percent_of_total', ascending=False)
-print('P1outputs:')
-print(sorted_P1_outputs.iloc[0:20])
+# Group across side
+P1_outputs = P1_outputs_conn_df.groupby(['type_pre', 'type_post'], \
+                                        as_index=False)['weight'].sum()
+
+#%%
+# Normalize by total outputs to each target type
+P1_outputs = get_and_norm_by_total_inputs(P1_outputs, 
+                                          groupby_type=True,
+                                          normalize_group_col='type_post')
 
 #%% 
 # P1 INPUTS:  Plot input matrix
 clear_empty_cells = True
 topN = 50
 min_input_weight = 0.01
-P1_input_conn_matrix = connection_table_to_matrix(P1_inputs_conn_df,
+P1_input_conn_matrix = connection_table_to_matrix(P1_inputs,
                                     weight_col='percent_of_total',
                                     group_cols=['type_pre', 'type_post'],
                                     sort_by= ['type_pre', 'type_post'])
 
 # Manually sort P1 labels (filter out None values)
 pre_order = P1_input_conn_matrix.sum(axis=1).sort_values(ascending=False).index.tolist()
-post_order = sorted([x if x is not None else 'None' for x in P1_inputs_conn_df['type_post'].unique() if x is not None], key=util.natsort)
+post_order = sorted(P1_inputs['type_post'].unique(), key=util.natsort)
 P1_input_conn_matrix = P1_input_conn_matrix.reindex(index=pre_order, columns=post_order)
 
 # Only take top N rows
-P1_summed_inputs = P1_input_conn_matrix.sum(axis=1).sort_values(ascending=False)
-P1_summed_inputs.iloc[0:30]
-
-#%
-# Only include connections with some min weight
-if min_input_weight > 0:
-    P1_input_conn_matrix[P1_input_conn_matrix < min_input_weight] = 0
-# Drop any rows that have all NaN values
-#P1_input_conn_filt = P1_input_conn_filt.dropna(axis=0, how='all')
-#
-P1_input_conn_filt = P1_input_conn_matrix.loc[P1_summed_inputs.index[0:topN]]
+P1_input_conn_filt = P1_input_conn_matrix.loc[pre_order[0:topN]]
 # Plot
 if clear_empty_cells:
     P1_input_conn_filt[P1_input_conn_filt==0] = np.nan
@@ -1537,8 +1704,7 @@ fig.axes[0].set_title('Top {} P1 inputs (min weight: {})'.format(topN, min_input
 
 #%%
 # Plot all P1 outputs
-
-P1_output_conn_matrix = connection_table_to_matrix(P1_outputs_conn_df,
+P1_output_conn_matrix = connection_table_to_matrix(P1_outputs,
                                     weight_col='percent_of_total',
                                     group_cols=['type_pre', 'type_post'],
                                     sort_by= ['type_pre', 'type_post'])
@@ -1551,21 +1717,14 @@ P1_output_conn_matrix = P1_output_conn_matrix.reindex(columns=post_order,
                                                       index=pre_order)
 
 #%
-clear_empty_cells = False
-topN = 50
+clear_empty_cells = True
+topN = 60
 min_output_weight = 0.05
 vmax = None
 
 # Only take top N outputs
-# Summing across the rows should equal to 1, since normalized each PRE by its total outputs
-# Sum across columns: Which targets of P1 types are getting the most?
-P1_summed_outputs = P1_output_conn_matrix.sum(axis=0).sort_values(ascending=False)
-P1_summed_outputs.iloc[0:30]
-P1_output_conn_matrix_filt = P1_output_conn_matrix[P1_summed_outputs.index[0:N]].copy()
+P1_output_conn_matrix_filt = P1_output_conn_matrix[post_order[0:topN]]
 
-# Only include connections with some min weight
-if min_output_weight > 0:
-    P1_output_conn_matrix[P1_output_conn_matrix < min_output_weight] = 0    
 if clear_empty_cells:
     P1_output_conn_matrix_filt[P1_output_conn_matrix_filt==0] = np.nan
     
@@ -1575,8 +1734,8 @@ fig = plot_connection_matrix(P1_output_conn_matrix_filt, ax=None, #ax,
                        colorbar_label=colorbar_label,
                        normalize_colors=True,
                        show_all_col_labels=True,
-                       show_all_row_labels=True, show_grid=False)
-                       #grid_color='k', grid_lw=0.0)
+                       show_all_row_labels=True, show_grid=True,
+                       grid_color='k', grid_lw=0.01)
 fig.axes[0].set_xlabel('Post-synaptic P1 type')
 fig.axes[0].set_title('Top {} P1 outputs (min weight: {})'.format(topN, min_output_weight))
 
@@ -1586,6 +1745,191 @@ top_P1_1b_outputs = P1_1b_outputs.iloc[0:3]
 highlight_row_or_column(fig.axes[0], P1_output_conn_matrix_filt, 
                         column_label=top_P1_1b_outputs.index.tolist(), 
                         color='red', linewidth=1)
+
+
+
+#%%
+
+#%%
+from sklearn.cluster import AgglomerativeClustering 
+from scipy.cluster.hierarchy import leaves_list
+
+def hier_cosine(indata,distance_thresh):
+    '''
+    From CDowell, compare with combined row+col clustering
+    Compute cosine similarity between all pairs of rows in the input matrix.
+    
+    Args:
+        indata: Input matrix
+        distance_thresh: Distance threshold for clustering (0=perfectly similar, 1=orthogonal)
+        Lower numbers, more strict (only merges vv similar clusters), distance_thresh=1, stops merging when clusters somewhat dissimilar
+        
+    Returns:
+        cluster: Clustering model
+        d_mat: Distance matrix
+    '''
+    
+    in_shape = np.shape(indata)
+    # Create similarity matrix, n_rows x n_rows
+    # in_shape[0] = rows in matrix (number of pre-syn types, for ex.)
+    sim_mat = np.zeros([in_shape[0], in_shape[0]],dtype='float64')
+    ilen = int(in_shape[0])
+    for i in range(in_shape[0]): # loop over rows
+        x = indata[i,:] # Take entire ROW i
+        for z in range(in_shape[0]):
+            y = indata[z,:] # Take entire ROW z
+            sim_mat[i,z] = np.dot(x,y)/(np.linalg.norm(x)*np.linalg.norm(y))
+            if np.isnan(sim_mat[i,z]):
+                print('i',i)
+                print('z',z)
+    d_mat = 1-sim_mat
+
+    cluster = AgglomerativeClustering(metric='precomputed', linkage='single', 
+                                    compute_distances = True, distance_threshold =distance_thresh, n_clusters = None)
+    cluster.fit(d_mat)
+    return cluster, d_mat
+
+def linkage_order(model):
+    ''' From CDowell, compare with combined row+col clustering
+    '''
+    counts = np.zeros(model.children_.shape[0])
+    n_samples = len(model.labels_)
+    for i, merge in enumerate(model.children_):
+        current_count = 0
+        for child_idx in merge:
+            if child_idx < n_samples:
+                current_count += 1  # leaf node
+            else:
+                current_count += counts[child_idx - n_samples]
+        counts[i] = current_count
+
+    linkage_matrix = np.column_stack(
+        [model.children_, model.distances_, counts]
+    ).astype(float)
+    z = leaves_list(linkage_matrix)
+    return z
+
+#%%
+
+# Get P1 inputs matrix
+weight_var = 'percent_of_total'
+P1_inputs_matrix = P1_inputs.pivot(index='type_pre', columns='type_post', 
+                                   values=weight_var).fillna(0)
+
+assert P1_inputs_matrix.shape[0]==P1_inputs['type_pre'].unique().shape[0]
+assert P1_inputs_matrix.shape[1]==P1_inputs['type_post'].unique().shape[0]
+#%%
+# P1 outputs matrix
+P1_outputs_matrix = P1_outputs.pivot(index='type_pre', columns='type_post', 
+                                   values=weight_var).fillna(0)
+
+assert P1_outputs_matrix.shape[0]==P1_outputs['type_pre'].unique().shape[0]
+assert P1_outputs_matrix.shape[1]==P1_outputs['type_post'].unique().shape[0]
+
+#%% Combine
+
+P1_combined = np.concatenate((P1_inputs_matrix.T, P1_outputs_matrix), axis=1)
+
+P1_combined = pd.DataFrame(P1_combined,
+                           index=P1_outputs_matrix.index.tolist(),
+                           columns=P1_inputs_matrix.index.tolist() + P1_outputs_matrix.columns.tolist())
+
+print(P1_combined.shape)
+
+#%%
+#mat_to_cluster = P1_outputs_matrix.copy()
+cluster_inputs = False
+output_type = 'in_out'
+use_log_weights = False
+
+label_cols = True
+label_rows = False
+if cluster_inputs:
+    mat_to_cluster = P1_inputs_matrix.copy()
+    rows = mat_to_cluster.index.tolist()
+    cols = mat_to_cluster.columns.tolist()
+    mat_to_cluster = mat_to_cluster.values
+    plot_label = 'P1 inputs'
+else:
+    if output_type == 'in_out':
+        mat_to_cluster = P1_combined.copy()
+        plot_label = 'P1 in/outputs'
+    else:
+        mat_to_cluster = P1_outputs_matrix.copy()
+        plot_label = 'P1 outputs'
+
+    # Make sure the rows are what we are clustering (outputs)
+    #mat_to_cluster = P1_combined.copy()    
+    cols = mat_to_cluster.index.tolist()
+    rows = mat_to_cluster.columns.tolist()
+    mat_to_cluster = mat_to_cluster.T.values
+cluster, dmat = hier_cosine( mat_to_cluster, distance_thresh=1)
+z = linkage_order(cluster)
+
+# Reorder the matrix based on clustering
+print(len(z), mat_to_cluster.shape)
+clustered_mat = mat_to_cluster[z, :] 
+
+clustered_mat = pd.DataFrame(clustered_mat, index=rows, columns=cols)
+print(clustered_mat.shape)
+
+
+if use_log_weights:
+    clustered_mat = util.log_weights(clustered_mat)
+    vmin = clustered_mat.min().min()
+    vmax = clustered_mat.max().max()
+    colorbar_label = 'log(weight)'
+else:
+    vmin = 0.0
+    vmax = 0.1
+    colorbar_label = 'weight'
+# Plot
+fig, ax = plt.subplots(figsize=(6, 6))
+plot_connection_matrix(clustered_mat, ax=ax, vmin=vmin, vmax=vmax,
+                       colorbar_label=colorbar_label,
+                       show_all_col_labels=label_cols,
+                       show_all_row_labels=label_rows,
+                       normalize_colors=True, show_grid=False)
+fig.axes[0].set_title(f'{plot_label} (cosine similarity clustered)')
+
+#%%
+# Hierarchically cluster P1_in_mat using cosine similarity
+P1_in_mat_clustered2, row_linkage, col_linkage = cluster_matrix_cosine_similarity(\
+                                        P1_inputs_matrix, method='single')
+if use_log_weights:
+    P1_in_mat_clustered2 = util.log_weights(P1_in_mat_clustered2)
+    vmin = P1_in_mat_clustered2.min().min()
+    vmax = P1_in_mat_clustered2.max().max()
+    colorbar_label = 'log(weight)'
+else:
+    vmin = 0.0
+    vmax = 0.1
+    colorbar_label = 'weight'
+# plot
+fig, ax = plt.subplots(figsize=(6, 6))
+plot_connection_matrix(P1_in_mat_clustered2, ax=ax, 
+                       normalize_colors=True, show_grid=False,
+                       vmin=vmin, vmax=vmax,
+                       colorbar_label=colorbar_label,
+                       show_all_col_labels=True)
+ax.set_title('P1 inputs (cosine similarity clustered)')
+ax.set_xlabel('Post-synaptic P1 type')
+ax.set_ylabel('Pre-synaptic P1 type')
+
+# Optional: If you want to plot dendrograms, you can use scipy.cluster.hierarchy.dendrogram
+# from scipy.cluster.hierarchy import dendrogram
+# fig_dendro, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+# dendrogram(cluster.linkage_, ax=ax1, labels=P1_inputs_matrix.index[z])
+# ax1.set_title('Row Dendrogram')
+# ax1.set_xlabel('P1 Input Types')
+
+
+
+
+
+
+
+#%%
 
 #%%
 
