@@ -94,7 +94,8 @@ LC10a_sides.loc[10573]
 # -------------------------------------------------------
 min_total_weight = 10
 weight_var = 'percent_of_total'
-groupby_cols=['roi_noside', 'type_pre', 'type_post', 'bodyId_pre', 'bodyId_post']
+groupby_cols=['roi_noside', 'type_pre', 'type_post', 'bodyId_pre', 'bodyId_post',
+              'instance_pre', 'instance_post']
 # bodyId_pre are INPUTS to targets, bodyId_post are the target IDs
 LC10a_inputs_conn_df, LC10a_inputs_matrix = npf.get_conn_all_inputs(target_type='LC10a',
                                                         client=c, 
@@ -215,7 +216,7 @@ def group_conn_df(conn_df, pre_variable='type_pre', post_variable='type_post',
                          
 #%%
 # Show Connection Matrix for LC10a INPUTS
-separate_by_side = False
+separate_by_side = True
 sort_by_weights_only = False
 weight_type = 'percent_of_total'
 #weight_type = 'weight'
