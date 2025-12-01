@@ -1204,7 +1204,7 @@ def plot_grouped_connection_matrix(conn_matrix, conn_df,
             xlim = ax.get_xlim()
             plot_width = xlim[1] - xlim[0]
             line_offset = xlim[0] - 0.01 * plot_width  # 1% of plot width to the left
-            label_offset = line_offset - 2 # - 0.01*plot_width #xlim[0] - 0.03 * plot_width  # 3% of plot width to the left
+            label_offset = xlim[0] - 0.02 * plot_width  # 3% of plot width to the left
             
             # Draw vertical lines spanning each ROI group and add labels on the left
             for i in range(len(roi_boundaries)-1):
