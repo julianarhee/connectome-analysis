@@ -8,6 +8,7 @@
  '''
 
 #%%
+from operator import truediv
 import os
 import glob
 import numpy as np
@@ -70,7 +71,8 @@ print(figid)
 
 #%% Plot style
 plot_style = 'dark'
-putil.set_sns_style(style=plot_style, min_fontsize=16)
+min_fontsize=12
+putil.set_sns_style(style=plot_style, min_fontsize=min_fontsize)
 bg_color = [0.7]*3 if plot_style=='dark' else 'k'
 
 #%% Output dir
@@ -188,7 +190,9 @@ print(sorted_LC10a_outputs.iloc[0:20])
 #%%
  # Add any missing columns
 def group_conn_df(conn_df, pre_variable='type_pre', post_variable='type_post', 
-                  pre_grouper='roi_noside', post_grouper='roi_noside', weight_type='weight'):
+                  pre_grouper='roi_noside', post_grouper='roi_noside', 
+                  weight_type='weight', 
+                  group_cols=['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post']):
     '''
     Group a connection dataframe by a given variable and sort by the weights.
     Args:
@@ -202,7 +206,7 @@ def group_conn_df(conn_df, pre_variable='type_pre', post_variable='type_post',
         conn_df: DataFrame, the grouped connection dataframe
     '''
     
-    group_cols = ['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post']
+    #group_cols = ['bodyId_pre', 'bodyId_post', 'type_pre', 'type_post']
     for col in [pre_variable, post_variable, pre_grouper, post_grouper]:
         if col not in group_cols:
             group_cols.append(col)
@@ -217,8 +221,8 @@ def group_conn_df(conn_df, pre_variable='type_pre', post_variable='type_post',
 # Show Connection Matrix for LC10a INPUTS
 separate_by_side = False
 sort_by_weights_only = False
-weight_type = 'percent_of_total'
-#weight_type = 'weight'
+#weight_type = 'percent_of_total'
+weight_type = 'weight'
 use_log_weights = weight_type == 'weight'
 vmax = 0.001 if weight_type == 'percent_of_total' else None
 
@@ -239,7 +243,6 @@ else:
     post_grouper = 'roi_noside'
     highlight_rows = ['TuTuA_2']
     
-
 # Group conn df
 LC10a_in = group_conn_df(LC10a_inputs_conn_df, pre_variable=pre_variable, post_variable=post_variable, 
                          pre_grouper=pre_grouper, post_grouper=post_grouper, weight_type=weight_type)
@@ -302,9 +305,55 @@ print(figname)
 
 plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
 
+#%%
+# Bar chart of strongest inputs by type and ROI
+def barplot_top_n(conn_df, groupby='type_pre', 
+                    weight_type='percent_of_total', n_top=20,
+                    use_log_weights=False):
+    #use_log_weights = weight_type == 'weight'
+    sorted_inputs = conn_df.groupby([groupby], as_index=False)\
+                            [weight_type].sum()\
+                            .sort_values(by=weight_type, ascending=False)
+    if use_log_weights:
+        sorted_inputs['log_weight'] = np.log(sorted_inputs[weight_type])
+        weight_var = 'log_weight'
+    else:
+        weight_var = weight_type
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sns.barplot(x=groupby, y=weight_var, ax=ax,
+                data=sorted_inputs.iloc[0:n_top], color=[0.7]*3)
+    # Make x-tick labels vertical 
+    ax.tick_params(axis='x', labelrotation=90)
+    # Only plot a subset of the x-tick labels
+    ax.set_xticks(ax.get_xticks())
+    ax.set_xlabel(groupby)
+    ax.set_ylabel(weight_var.replace('_', ' '))
+    plt.subplots_adjust(bottom=0.2)
+
+    return fig, ax
+#%%
+# BARPLOT: LC10a inputs
+weight_type = 'percent_of_total'
+#weight_type = 'weight'
+n_top = 20
+fig, ax = barplot_top_n(LC10a_inputs_conn_df, 
+                        groupby='type_pre', 
+                        weight_type=weight_type, n_top=n_top,
+                        use_log_weights=False)
+ax.set_title(f'Strongest inputs by type (min. weight = {min_total_weight})')
+plt.subplots_adjust(bottom=0.2)
+#plt.show()
+putil.label_figure(fig, figid)
+figname = f'LC10a_top{n_top}_inputs_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 
 #%%
 # LC10a OUTPUTS: 
+weight_type = 'weight'
+use_log_weights = weight_type == 'weight'
+vmax = 0.001 if weight_type == 'percent_of_total' else None
+
 pre_variable = 'bodyId_pre'
 post_variable = 'type_post'
 
@@ -318,7 +367,8 @@ else:
     post_grouper = 'roi_noside'
 # Get conn matrix       
 LC10a_out_df = group_conn_df(LC10a_outputs_conn_df, pre_variable=pre_variable, post_variable=post_variable, 
-                    pre_grouper=pre_grouper, post_grouper=post_grouper, weight_type=weight_type)
+                    pre_grouper=pre_grouper, post_grouper=post_grouper, weight_type=weight_type,
+                    group_cols=['bodyId_pre', 'type_pre', 'type_post', 'roi_noside'])
 
 LC10a_out_conn_matrix = connection_table_to_matrix(LC10a_out_df,
                                 weight_col=weight_type,
@@ -355,7 +405,7 @@ fig = npf.plot_grouped_connection_matrix(LC10a_out_mat,
                                      annotate_cols=True, 
                                      show_all_col_labels=True,
                                      colorbar_label=colorbar_label, 
-                                     vmax=0.02) #None)
+                                     vmax=vmax) #None)
 fig.axes[0].set_title('LC10a outputs')
 #%
 # Add a thin box around a specified column or row based on the label
@@ -370,9 +420,25 @@ print(figname)
 plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
 
 #%%
+# BARPLOT: LC10a outputs
+weight_type = 'percent_of_total'
+#weight_type = 'weight'
+n_top = 20
+fig, ax = barplot_top_n(LC10a_outputs_conn_df, groupby='type_post', 
+                        weight_type=weight_type, n_top=n_top,
+                        use_log_weights=False)
+ax.set_title(f'Strongest outputs by type (min. weight = {min_total_weight})')
+plt.subplots_adjust(bottom=0.2)
+putil.label_figure(fig, figid)
+
+
+figname = f'LC10a_top_{n_top}_outputs_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
+#%%
 # Get percent of total weights for IN
-LC10a_inputs_conn_df = npf.norm_by_specified_inputs(LC10a_inputs_conn_df, group_col='bodyId_post')
-LC10a_outputs_conn_df = npf.get_and_norm_by_total_inputs(LC10a_outputs_conn_df, 
+#LC10a_inputs_conn_df = npf.norm_by_specified_inputs(LC10a_inputs_conn_df, group_col='bodyId_post')
+#LC10a_outputs_conn_df = npf.get_and_norm_by_total_inputs(LC10a_outputs_conn_df, 
                                                      normalize_group_col='type_post')
 
 #%%
@@ -447,10 +513,12 @@ TuTuA2_outputs_neuron_df, TuTuA2_outputs_conn_df = neu.fetch_adjacencies(sources
                                                                          min_total_weight=10)
 TuTuA2_outputs_conn_df = neu.merge_neuron_properties(TuTuA2_outputs_neuron_df, TuTuA2_outputs_conn_df, ['type', 'instance'])
 # Extract side info
-TuTuA2_outputs_conn_df = npf.extract_side_from_conn_df(TuTuA2_outputs_conn_df)
+TuTuA2_outputs_conn_df0 = npf.extract_side_from_conn_df(TuTuA2_outputs_conn_df)
 # Add percent of total weight
-TuTuA2_outputs_conn_df = npf.get_and_norm_by_total_inputs(TuTuA2_outputs_conn_df, 
-                                                    normalize_group_col='type_post')
+TuTuA2_outputs_conn_df = npf.get_and_norm_by_total_inputs(TuTuA2_outputs_conn_df0, c, 
+                                                    normalize_group_col='type_post',
+                                                    groupby_cols=['type_pre', 'type_post', 'roi_noside', 
+                                                    'instance_post', 'instance_pre'])
 
 #%%
 # TuTuA_2 inputs: Aggregate all weights (aggregate across ROIs) to get total connection weights
@@ -470,7 +538,7 @@ if weight_type == 'percent_of_total':
     #TuTuA2_in_conn_mat[TuTuA2_in_conn_mat==0] = np.nan
     colorbar_label = 'percent of total inputs'
     vmin = 0
-    vmax = 0.5
+    vmax = 0.4
 elif weight_type == 'log':
     TuTuA2_in_conn_mat = util.log_weights(TuTuA2_in_conn_mat)
     vmax = TuTuA2_in_conn_mat.max().max()
@@ -491,16 +559,22 @@ fig = npf.plot_connection_matrix(TuTuA2_in_conn_mat, ax=ax,
 ax.set_title('TuTuA_2 inputs')
 ax.set_xlabel('Post-synaptic bodyId')
 ax.set_ylabel('Pre-synaptic bodyId')
-plt.show()
+#plt.show()
+
+putil.label_figure(fig, figid)
+figname = f'TuTuA2_inputs_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 #
 #%% 
 # Plot TuTuA_2 inputs: Separate by ROI/side
 # ------------------------------------------------------------
 sort_weights = False #True
 plot_by_side = True
-weight_type = 'percent_of_total'
-use_log_weights = True
-
+weight_type = 'weight' # 'percent_of_total'
+use_log_weights = weight_type == 'weight'
+vmin = 0
+vmax = 0.4
 if plot_by_side:
     pre_variable = 'instance_pre'
     pre_grouper = 'side_pre' 
@@ -517,6 +591,7 @@ manual_groups = sorted_by_grouper #False
 
 # --------
 TuTuA2_in_conn_matrix = connection_table_to_matrix(TuTuA2_inputs_conn_df,
+                        weight_col=weight_type,
                         group_cols=[pre_variable, post_variable],
                         sort_by= [ pre_grouper, post_grouper]) #'weight']) 
 
@@ -545,9 +620,11 @@ post_grouper_dict = {roi: sns.color_palette("tab10")[i]
 if use_log_weights:
     plot_TuTuA2_in = util.log_weights(TuTuA2_in_conn_matrix)
     colorbar_label = f'log({weight_type})'
+    vmax = None
 else:
     plot_TuTuA2_in = TuTuA2_in_conn_matrix
-    colorbar_label = 'weight'
+    colorbar_label = weight_type.replace('_', ' ') 
+    vmax = 0.25
 
 fig = npf.plot_grouped_connection_matrix(plot_TuTuA2_in, TuTuA2_inputs_conn_df, 
                                      pre_grouper_dict=pre_grouper_dict,
@@ -562,41 +639,59 @@ fig = npf.plot_grouped_connection_matrix(plot_TuTuA2_in, TuTuA2_inputs_conn_df,
                                      annotate_cols=True,
                                      show_all_row_labels=True,
                                      show_all_col_labels=True,
-                                     colorbar_label=colorbar_label)
+                                     colorbar_label=colorbar_label,
+                                     vmax=vmax)
 fig.axes[0].set_title('TuTuA_2 inputs')
 
 # Highlight
-npf.highlight_row_or_column(fig.axes[0], plot_TuTuA2_in, row_label=['SMP054_L', 'SMP054_R'],
+npf.highlight_row_or_column(fig.axes[0], plot_TuTuA2_in, 
+                        row_label=['SMP054_L', 'SMP054_R', 'LC10a_L', 'LC10a_R'],
                         color='k', linewidth=2, highlight_box=False)
+
+putil.label_figure(fig, figid)
+figname = f'TuTuA2_inputs_byside_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
+
 
 #%%
 # TuTuA_2: plot inputs x outputs 
-weight_label = 'percent_of_total'
+weight_type = 'percent_of_total'
 TuTuA_in_, TuTuA2_out_, TuTuA2_in_out = npf.matmul_conn_matrices(
                                 TuTuA2_inputs_conn_df, TuTuA2_outputs_conn_df, 
-                                 weight_label='percent_of_total',
+                                 weight_label=weight_type,
                                  sort_rows='weight', sort_cols='weight',
                                  conn1_pre='type_pre', conn1_post='instance_post',
                                  conn2_pre='instance_pre', conn2_post='type_post',
                                  return_all=True)
 #%
 vmax=0.2
-fig, axn = plt.subplots(1, 3, figsize=(12, 4))
+fig, axn = plt.subplots(1, 3, figsize=(12, 6))
 npf.plot_connection_matrix(TuTuA_in_, ax=axn[0],
                        vmin=vmin, vmax=vmax,
-                       colorbar_label=weight_label,
-                       normalize_colors=True)
+                       colorbar_label=weight_type,
+                       normalize_colors=True,
+                       show_all_row_labels=True)
 axn[0].set_title('TuTuA_2 inputs')
 npf.plot_connection_matrix(TuTuA2_out_, ax=axn[1],
                        vmin=vmin, vmax=vmax,
-                       colorbar_label=weight_label,
-                       normalize_colors=True)
+                       colorbar_label=weight_type,
+                       normalize_colors=True,
+                       show_all_col_labels=True)
 axn[1].set_title('TuTuA_2 outputs')
 npf.plot_connection_matrix(TuTuA2_in_out, ax=axn[2],
                        vmin=vmin, vmax=vmax,
-                       colorbar_label=weight_label,
-                       normalize_colors=True)
+                       colorbar_label=weight_type,
+                       normalize_colors=True,
+                       show_all_col_labels=True,
+                       show_all_row_labels=True)
 axn[2].set_title('TuTuA_2 inputs X outputs')
+plt.subplots_adjust(wspace=0.5, bottom=0.3)
+
+putil.label_figure(fig, figid)
+figname = f'TuTuA2_inputs_x_outputs_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 
 #%%
 # Total inputs and outputs for P1_1b
@@ -659,7 +754,7 @@ P1_1_outputs_aggr['percent_of_total'] = P1_1_outputs_aggr['weight'] / total_P1_1
 P1_1b_outputs_by_type = P1_1_outputs_aggr[P1_1_outputs_aggr['type_pre']=='P1_1b']\
                                 .groupby('type_post')['percent_of_total']\
                                 .sum().sort_values(ascending=False)
-print("Top P1_1b outputs:")
+print("Top P1_1a/b outputs:")
 print(P1_1b_outputs_by_type.iloc[0:20])
 
 #%%
@@ -667,14 +762,18 @@ print(P1_1b_outputs_by_type.iloc[0:20])
 # Plot connection matrix showing inputs to P1_1b as the rows,
 # and outputs from P1_1b as the columns
 # ------------------------------------------------------------
-P1_1b_inputs_conn_df = P1_1_inputs_conn_df[P1_1_inputs_conn_df['type_post']=='P1_1b']
-P1_1b_outputs_conn_df = P1_1_outputs_conn_df[P1_1_outputs_conn_df['type_pre']=='P1_1b']
+#P1_1b_inputs_conn_df = P1_1_inputs_conn_df[P1_1_inputs_conn_df['type_post']=='P1_1b']
+#P1_1b_outputs_conn_df = P1_1_outputs_conn_df[P1_1_outputs_conn_df['type_pre']=='P1_1b']
 
 # Normalize inputs by total inputs to P1_1b
-P1_1b_inputs_conn_df = npf.norm_by_specified_inputs(P1_1b_inputs_conn_df, group_col='instance_post')
+P1_1_inputs_conn_df = npf.norm_by_specified_inputs(P1_1_inputs_conn_df, group_col='instance_post')
 
 # Get all inputs to P1_1b outputs
-P1_1b_outputs_conn_df = npf.get_and_norm_by_total_inputs(P1_1b_outputs_conn_df)
+P1_1_outputs_conn_df = npf.get_and_norm_by_total_inputs(P1_1_outputs_conn_df,
+                                                        c,
+                                                        normalize_group_col='type_post',
+                                                        groupby_cols=['type_pre', 'type_post', 'roi_noside', 
+                                                        'instance_post', 'instance_pre']) #,
 
 # inputs_to_P1_1b_outputs_neurons, inputs_to_P1_1b_outputs_conns = neu.fetch_adjacencies(
 #                                           sources=None,
@@ -693,7 +792,12 @@ P1_1b_outputs_conn_df = npf.get_and_norm_by_total_inputs(P1_1b_outputs_conn_df)
 #%%
 # Combine connection matrices
 # ------------------------------------------------------------
-weight_label = 'percent_of_total';
+weight_type = 'percent_of_total'
+#weight_type = 'weight'
+use_log_weights = weight_type == 'weight'
+weight_label = f'log({weight_type}' if use_log_weights else weight_type.replace('_', ' ') 
+vmax=0.1 if weight_type == 'percent_of_total' else None
+
 # P1_1b_inputs_conn = connection_table_to_matrix(P1_1b_inputs_conn_df,
 #                         group_cols=['type_pre', 'instance_post'],
 #                         sort_by= ['weight', 'weight'],
@@ -711,14 +815,20 @@ weight_label = 'percent_of_total';
 # # Do matrix multiplication of inputs and outputs
 # P1_in_out = P1_1b_inputs_conn.dot(P1_1b_outputs_conn)
 
-P1_1b_in, P1_1b_out, P1_in_out = npf.matmul_conn_matrices(P1_1b_inputs_conn_df, P1_1b_outputs_conn_df, 
-                                 weight_label=weight_label,
+
+P1_1_in, P1_1_out, P1_in_out = npf.matmul_conn_matrices(P1_1_inputs_conn_df, P1_1b_outputs_conn_df, 
+                                 weight_label=weight_type,
                                  sort_rows='weight', sort_cols='weight',
                                  conn1_pre='type_pre', conn1_post='instance_post',
                                  conn2_pre='instance_pre', conn2_post='type_post',
                                  return_all=True)
+
+if use_log_weights:
+    P1_1_in = util.log_weights(P1_1_in)
+    P1_1_out = util.log_weights(P1_1_out)
+    P1_in_out = util.log_weights(P1_in_out)
+
 #% PLOT
-vmin = 0; vmax=0.1;
 # Make a big grid of plots using GridSpec
 fig = plt.figure(figsize=(12, 12))
 gs = fig.add_gridspec(2, 2)
@@ -726,25 +836,56 @@ gs = fig.add_gridspec(2, 2)
 axn = [fig.add_subplot(gs[0, 0]), 
        fig.add_subplot(gs[0, 1]), 
        fig.add_subplot(gs[1:, 0:])] #, fig.add_subplot(gs[1, 1])]
-npf.plot_connection_matrix(P1_1b_in, ax=axn[0],
+npf.plot_connection_matrix(P1_1_in, ax=axn[0],
                        vmin=vmin, vmax=vmax,
-                       colorbar_label=weight_label,
-                       normalize_colors=True)
+                       colorbar_label=weight_type,
+                       normalize_colors=True,
+                       show_all_row_labels=True)
 axn[0].set_title('P1_1b inputs (% of total inputs to P1_1b)')
-npf.plot_connection_matrix(P1_1b_out, ax=axn[1],
+npf.plot_connection_matrix(P1_1_out, ax=axn[1],
                        vmin=vmin, vmax=vmax,
-                       colorbar_label=weight_label,
+                       colorbar_label=weight_type,
                        normalize_colors=True)
 axn[1].set_title('P1_1b outputs (% total inputs to targets)')
 
 axn[2].set_title('P1_1b inputs X outputs')
 npf.plot_connection_matrix(P1_in_out, ax=axn[2],
                        vmin=vmin, vmax=None,
-                       colorbar_label=weight_label,
+                       colorbar_label=weight_type,
                        normalize_colors=True,
-                       show_all_row_labels=Tr                       show_all_col_labels=True)
+                       show_all_row_labels=True,
+                       show_all_col_labels=True)             
 axn[2].set_title('P1_1b inputs X outputs')
 
+putil.label_figure(fig, figid)
+figname = f'P1_1_inputs_x_outputs_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
+
+#%%
+# Which LC10a sources go to which P1, via P1_1?
+# Level 2
+P1_target_cols = [c for c in P1_in_out.columns if c.startswith('P1_')]
+print(f"{len(P1_target_cols)}")
+
+# get subset
+LC10a_in_out = P1_in_out.loc['LC10a', P1_target_cols].copy()
+LC10a_in_out.sort_values(ascending=False, inplace=True)
+
+# plot
+fig, ax = plt.subplots(figsize=(6, 4))
+sns.barplot(x=LC10a_in_out.index, y=LC10a_in_out.values, ax=ax,
+                color=bg_color )
+ax.set_title('LC10a inputs to P1 via P1_1')
+# rotate x-tick labels
+plt.xticks(rotation=90)
+ax.set_ylabel(weight_label.replace('_', ' '))
+plt.subplots_adjust(bottom=0.3, left=0.2)
+
+putil.label_figure(fig, figid)
+figname = f'LC10a_inputs_to_P1_via_P1_1_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 
 #%%
 
@@ -763,6 +904,7 @@ P1_inputs = P1_inputs_conn_df.groupby(['type_pre', 'type_post'], \
 # Normalize by total inputs to each target type
 P1_inputs = npf.norm_by_specified_inputs(P1_inputs, group_col='type_post')
 
+
 #%%
 # Get ALL P1 OUTPUTS:
 # ------------------------------------------------------------
@@ -777,9 +919,10 @@ P1_outputs = P1_outputs_conn_df.groupby(['type_pre', 'type_post'], \
 
 #%%
 # Normalize by total outputs to each target type
-P1_outputs = npf.get_and_norm_by_total_inputs(P1_outputs, 
-                                          groupby_type=True,
-                                          normalize_group_col='type_post')
+P1_outputs = npf.get_and_norm_by_total_inputs(P1_outputs, c,
+                                          #groupby_type=True,
+                                          normalize_group_col='type_post',
+                                          )
 
 #%% 
 # P1 INPUTS:  Plot input matrix
@@ -817,6 +960,11 @@ fig = npf.plot_connection_matrix(P1_input_conn_filt, ax=None, #ax,
 fig.axes[0].set_xlabel('Post-synaptic P1 type')
 fig.axes[0].set_title('Top {} P1 inputs (min weight: {})'.format(topN, min_input_weight))
 
+# save
+putil.label_figure(fig, figid)
+figname = f'P1_inputs_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 
 #%%
 # Plot all P1 outputs
@@ -1018,6 +1166,7 @@ print(top_SIP_outputs.iloc[0:20])
 
 #%%
 
+weight_type = 'percent_of_total'
 # Plot P1 to P1 connections
 P1_P1_neuron_df, P1_P1_conn_df = neu.fetch_adjacencies(sources=NC(type='P1.*'),
                                                        targets=NC(type='P1.*'))
@@ -1056,14 +1205,20 @@ vmin=None;vmax=None;
 fig, ax = plt.subplots(figsize=(6, 6))
 npf.plot_connection_matrix(P1_P1_conn_matrix, ax=ax,
                        vmin=vmin, vmax=vmax,
-                       colorbar_label=colorbar_label,
+                       colorbar_label='percent of total',
                        normalize_colors=True,
                        show_all_col_labels=True,
-                       show_all_row_labels=True, show_grid=True, 
+                       show_all_row_labels=True, show_grid=False, 
                        grid_color=[0.8]*3, grid_lw=0.001)
+ax.set_aspect(1)
 ax.set_title('P1_P1 connections')
 ax.set_xlabel('Post-synaptic P1 type')
 ax.set_ylabel('Pre-synaptic P1 type')
+
+putil.label_figure(fig, figid)
+figname = f'P1_P1_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 
 #%%
 # Cluster P1_P1_conn_matrix using cosine similarity
@@ -1081,6 +1236,11 @@ ax = fig.axes[0]
 ax.set_title('P1_P1 connections (cosine similarity clustered)')
 ax.set_xlabel('Post-synaptic P1 type')
 ax.set_ylabel('Pre-synaptic P1 type')
+
+putil.label_figure(fig, figid)
+figname = f'P1_P1_clustered_{weight_type}'
+plt.savefig(os.path.join(output_dir, figname + '.png'), dpi=300)
+print(figname)
 
 #%%
 # Plot dendrograms to understand the clustering
