@@ -69,6 +69,16 @@ def merge_properties_and_group(neuron_df, conn_df,
 
     return conn_df
 
+def extract_side_from_column(df, column='roi'):
+    if column == 'roi':
+        #df['side'] = df['roi'].str.extract(r'^(.*)\(.*\)', expand=False)
+        df['side'] = df['roi'].str.extract(r'\(([LR])\)', expand=False)
+    elif column == 'instance':
+        df['side'] = df['instance'].apply(lambda x: x.split('_')[-1] if pd.notna(x) and x is not None else None)
+    
+    return df['side']
+
+
 def extract_side_from_conn_df(conn_df):
     '''
     Extract the side from the instance column and the ROI without the side from the roi column.
