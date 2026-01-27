@@ -736,5 +736,60 @@ plt.savefig(os.path.join(output_dir, f"{figname}.png"), dpi=300)
 print(figname)
 
 
-
 # %%
+# All AOTU042 inputs?
+# ------------------------------------------------------------
+AOTU_inputs_neuron_df, AOTU_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                                   targets=NC(type='AOTU042'),
+                                                                   min_total_weight=10)
+AOTU_inputs_conn_df = neu.merge_neuron_properties(AOTU_inputs_neuron_df, AOTU_inputs_conn_df, ['type', 'instance'])
+
+#%
+# Sort AOTU042 inptus by weight
+AOTU_inputs_sorted = AOTU_inputs_conn_df.groupby(['type_pre'])['weight']\
+                            .sum().reset_index().sort_values(by='weight', \
+                                ascending=False).reset_index()
+print("Top 20 AOTU042 input types:")
+print(AOTU_inputs_sorted.head(20))
+
+P1_to_AOTU042_types = [i for i in AOTU_inputs_sorted['type_pre'] if 'P1_' in i]
+print("P1 types that target AOTU042:")
+print(P1_to_AOTU042_types)
+
+#%%
+# All TuTuA_2 inputs?
+TuTuA2_inputs_neuron_df, TuTuA2_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                    targets=NC(type='TuTuA_2'),
+                                                    min_total_weight=5)
+TuTuA2_inputs_conn_df = neu.merge_neuron_properties(TuTuA2_inputs_neuron_df, 
+                                                    TuTuA2_inputs_conn_df, 
+                                                    ['type', 'instance'])
+#%
+# Sort TuTuA_2 inptus by weight
+TuTuA2_inputs_sorted = TuTuA2_inputs_conn_df.groupby(['type_pre'])['weight']\
+                            .sum().reset_index().sort_values(by='weight', \
+                                ascending=False).reset_index()
+print("Top 20 TuTuA_2 inputs:")
+print(TuTuA2_inputs_sorted.head(20))
+
+# P1 types
+P1_to_TuTuA2_types = [i for i in TuTuA2_inputs_sorted['type_pre'] if 'P1_' in i]
+print("P1 types that target TuTuA_2:")
+print(P1_to_TuTuA2_types)
+# %%
+# All LC10a inputs?
+LC10a_inputs_neuron_df, LC10a_inputs_conn_df = neu.fetch_adjacencies(sources=None,
+                                                                   targets=NC(type='LC10a'),
+                                                                   min_total_weight=10)
+LC10a_inputs_conn_df = neu.merge_neuron_properties(LC10a_inputs_neuron_df, LC10a_inputs_conn_df, ['type', 'instance'])
+
+# Sort inputs by weight
+LC10a_inputs_sorted = LC10a_inputs_conn_df.groupby(['type_pre'])['weight']\
+                            .sum().reset_index().sort_values(by='weight', \
+                                ascending=False).reset_index()
+print("Top 20 LC10a input types:")
+print(LC10a_inputs_sorted.head(20))
+
+P1_to_LC10a_types = [i for i in LC10a_inputs_sorted['type_pre'] if 'P1_' in i]
+print("P1 types that target LC10a:")
+print(P1_to_LC10a_types)
