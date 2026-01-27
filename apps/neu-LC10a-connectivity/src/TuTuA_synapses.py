@@ -42,8 +42,25 @@ import importlib
 # Simple function to set colors - call this with different palette names to change colors
 def set_segment_colors(segments, body_ids, palette='Viridis', n_colors=256):
     """Update color columns in segments DataFrame based on palette."""
-    palette_func = getattr(bokeh.palettes, palette, bokeh.palettes.Viridis)
-    colors = palette_func[n_colors] if n_colors in palette_func else palette_func[256]
+    colors = []
+    if isinstance(palette, str):
+        palette_attr = getattr(bokeh.palettes, palette, None)
+        if palette_attr is not None:
+            if callable(palette_attr):
+                colors = palette_attr(n_colors)
+            elif isinstance(palette_attr, dict):
+                colors = palette_attr.get(n_colors) or next(iter(palette_attr.values()))
+            else:
+                colors = list(palette_attr)
+        if not colors:
+            colors = sns.color_palette(palette, n_colors=n_colors).as_hex()
+    elif isinstance(palette, (list, tuple)):
+        colors = list(palette)
+    else:
+        colors = sns.color_palette(palette, n_colors=n_colors).as_hex()
+
+    if len(colors) < len(body_ids):
+        colors = sns.color_palette(colors, n_colors=len(body_ids)).as_hex()
     
     color_map = {bodyId: colors[int((i / len(body_ids)) * (len(colors) - 1))] 
                 for i, bodyId in enumerate(body_ids)}
@@ -74,9 +91,14 @@ def do_pca_on_synapses(tutu_lc10a_syn, xvar='post_z', yvar='post_y', verbose=Fal
     return lc10a_pca_scores
 
 
-def plot_pca_transformed(tutu_lc10a_syn, tutu_lc10a_syn_pca, lc10a_cdict,
-                         xvar='post_z', yvar='post_y', hue_var='post_root_id',
-                         markersize=20, marker='x', invert_yaxis=True):
+def plot_pca_transformed(tutu_lc10a_syn, tutu_lc10a_syn_pca, 
+                        lc10a_cdict=None, hue_palette='viridis_r',
+                        xvar='post_z', yvar='post_y', hue_var='post_root_id',
+                        markersize=20, marker='x', invert_yaxis=True):
+    if lc10a_cdict is None:
+        colors = sns.color_palette(hue_palette, n_colors=len(sorted_lc10a_ids_list)).as_hex()
+        lc10a_cdict = dict(zip(sorted_lc10a_ids_list, colors))
+
     # Plot to check
     fig, axn = plt.subplots(1, 2, figsize=(10, 5))
     ax=axn[0]
@@ -90,7 +112,11 @@ def plot_pca_transformed(tutu_lc10a_syn, tutu_lc10a_syn_pca, lc10a_cdict,
     if invert_yaxis:
         ax.invert_yaxis()
     #ax.invert_xaxis()
-    # Add colorbar
+    # Add colorbar using lc10a color mapping so it reflects the palette order
+    palette_colors = [lc10a_cdict.get(bodyId, '#000000') for bodyId in sorted_lc10a_ids_list]
+    palette_cmap = ListedColormap(palette_colors)
+    sm = cm.ScalarMappable(cmap=palette_cmap)
+    sm.set_clim(0, max(len(palette_colors) - 1, 1))
     cbar = ax.figure.colorbar(sm, ax=ax, shrink=0.5)
     cbar.set_label(f'{hue_var}', fontsize=8)
     cbar.ax.tick_params(labelsize=8)
@@ -147,14 +173,21 @@ def bin_pca_scores(tutu_lc10a_syn_pca, n_bins=20):
 
     return tutu_lc10a_syn_pca_binned
 
-def plot_joint_pca_scores(tutu_lc10a_syn_pca_binned, tutu_lc10a_syn_pca, lc10a_cdict,
-                          hue_var='post_root_id', bin_cmap = 'viridis_r',
-                          markersize=20, marker='x', alpha=1,
-                          marginal_marker='o', marginal_markersize=20):
+def plot_joint_pca_scores(tutu_lc10a_syn_pca_binned, tutu_lc10a_syn_pca, 
+                        lc10a_cdict=None, hue_palette='viridis',
+                        bin_cmap='viridis',
+                        hue_var='post_root_id',
+                        markersize=20, marker='x', alpha=1,
+                        marginal_marker='o', marginal_markersize=20,
+                        figsize=(5, 3.5)):
     #bin_cmap = 'viridis_r'
+    
+    max_bins = max(tutu_lc10a_syn_pca_binned['PC1_bin_label'].nunique(),
+                   tutu_lc10a_syn_pca_binned['PC2_bin_label'].nunique(), 3)
+    bin_palette = _palette_list_from_cmap(bin_cmap, n_colors=max_bins)
 
     # Plot the data in the new basis with PC1 and PC2
-    fig, axn = plt.subplots(2, 1, figsize=(5, 3.5), sharex=True)
+    fig, axn = plt.subplots(2, 1, figsize=figsize, sharex=True)
     # Reduce white space by adjusting subplot layout more aggressively
     plt.subplots_adjust(top=0.98, bottom=0.12, hspace=0.3)
 
@@ -163,7 +196,7 @@ def plot_joint_pca_scores(tutu_lc10a_syn_pca_binned, tutu_lc10a_syn_pca, lc10a_c
     sns.scatterplot(data=tutu_lc10a_syn_pca_binned, 
                 x='PC1_bin_numeric', y='PC1',
                 hue='PC1_bin_label',
-                palette=bin_cmap, legend=0, ax=ax_pc1,
+                palette=bin_palette, legend=0, ax=ax_pc1,
                 marker=marginal_marker, s=marginal_markersize)
     ax_pc1.set_xlabel('PC1')
     ax_pc1.set_ylabel('Count')
@@ -210,18 +243,39 @@ def plot_joint_pca_scores(tutu_lc10a_syn_pca_binned, tutu_lc10a_syn_pca, lc10a_c
     sns.scatterplot(data=tutu_lc10a_syn_pca_binned, 
                 y='PC2_bin_numeric', x='PC2',
                 hue='PC2_bin_label',
-                palette=bin_cmap, legend=0, ax=ax_pc2,
+                palette=bin_palette, legend=0, ax=ax_pc2,
                 marker=marginal_marker, s=marginal_markersize)
     ax_pc2.set_yticklabels([])
     ax_pc2.set_ylabel('')
     #ax_pc2.set_yticklabels([])
     ax_pc1.set_xticklabels([])
 
+    # Only plot the max value for ax_pc1 and ax_pc2
+    ax_pc1.set_ylim(0, tutu_lc10a_syn_pca_binned['PC1'].max())
+    ax_pc2.set_xlim(0, tutu_lc10a_syn_pca_binned['PC2'].max())
+    # Only label the max value for ax_pc1 and ax_pc2
+    ax_pc1.set_yticks([tutu_lc10a_syn_pca_binned['PC1'].max()])
+    ax_pc2.set_xticks([tutu_lc10a_syn_pca_binned['PC2'].max()])
+
     #plt.subplots_adjust(top=0.8)
     for ax in [ax_pc1, ax_main, ax_pc2]:
         sns.despine(ax=ax, top=True, right=True)
 
     return fig
+
+def _palette_list_from_cmap(palette_cmap, n_colors=256):
+    if isinstance(palette_cmap, str):
+        return sns.color_palette(palette_cmap, n_colors=n_colors)
+    if isinstance(palette_cmap, ListedColormap):
+        return palette_cmap.colors or sns.color_palette("viridis", n_colors=n_colors)
+    if hasattr(palette_cmap, "colors"):
+        return list(palette_cmap.colors)
+    if callable(palette_cmap):
+        return palette_cmap(np.linspace(0, 1, n_colors))
+    if isinstance(palette_cmap, (list, tuple)):
+        return list(palette_cmap)
+    return sns.color_palette("viridis", n_colors=n_colors)
+
 
 
 #%%
@@ -246,20 +300,10 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 print(f'Output directory: {output_dir}')
 
-# %%
-# Get all TuTuA neurons
-# Get all TuTuA_2 neurons
-# ======================================================
-TuTuA2_neurons, TuTuA2_roi_counts = neu.fetch_neurons(NC(type='TuTuA_2', 
-                                                         client=c))
-TuTuA2_neurons.head()
-
 #%%
 # Get all LC10a neurons
-LC10a_neurons, LC10a_roi_counts = neu.fetch_neurons(NC(type='LC10a', 
-                                                         client=c))
+LC10a_neurons, LC10a_roi_counts = neu.fetch_neurons(NC(type='LC10a',                                                          client=c))
 LC10a_neurons.head()
-
 
 #%%
 # Get AOTU019 and AOTU025 neurons for reference
@@ -267,11 +311,9 @@ aotu19_neurons, aotu19_roi_counts = neu.fetch_neurons(NC(type='AOTU019',
                                                          client=c))
 aotu25_neurons, aotu25_roi_counts = neu.fetch_neurons(NC(type='AOTU025', 
                                                          client=c))
-
-
 #%%
 # Select 1 side to look at
-side = 'R' #'R'
+side = 'L' #'R'
 
 if side is not None:
     aotu19_ids = aotu19_neurons[aotu19_neurons['instance']==f'AOTU019_{side}']['bodyId'].unique()
@@ -295,13 +337,11 @@ syn_crit = SC(confidence=min_confidence)
 lc10a_syn = neu.fetch_synapses(lc10a_ids, client=c,
                                nt='max', synapse_criteria=syn_crit)
 #%
-#lc10a_syn = lc10a_syn[lc10a_syn['roi_post']==f'AOTU({side})']
-print(f"Number of LC10a synapses: {len(lc10a_syn)}")
-lc10a_syn.head()
-
-#%%
 # Extract L or R from ROI(L) or ROI(R) using regexp to find what is inside the parentheses
 lc10a_syn['side'] = npf.extract_side_from_column(lc10a_syn, column='roi')
+
+print(f"Number of LC10a synapses: {len(lc10a_syn)}")
+lc10a_syn.head()
 
 #%%
 # Get LC10a -> AOTU19/25 synapses
@@ -326,9 +366,10 @@ else:
     LO_coords = lc10a_syn[lc10a_syn['bodyId'].isin(lc10a_ids)
                         & (lc10a_syn['roi'].str.contains('LO'))].copy()
 
-sort_by = 'y'
+sort_by = 'z'
 # Sort bodyids by sory_by
-sorted_lc10a_ids = LO_coords.sort_values(by=sort_by)['bodyId'].unique()
+sorted_lc10a_ids = LO_coords.sort_values(by=sort_by, 
+                        ascending=False)['bodyId'].unique()
 
 #%%
 # Create dictionary of colors
@@ -346,8 +387,8 @@ aotu25_color = 'b'
 #%%
 
 # Color-code by LO position 
-xvar = 'x'
-yvar = 'z'
+xvar = 'z'
+yvar = 'y'
 fig, axn = plt.subplots(1, 2, figsize=(10, 5),
                         sharex=True, sharey=True)
 ax=axn[0]
@@ -373,8 +414,8 @@ ax.legend(frameon=False, markerscale=5)
 ax.set_aspect('equal')
 
 ax.invert_yaxis()
-if xvar == 'x':
-    ax.invert_xaxis()
+#if xvar == 'x':
+#    ax.invert_xaxis()
 
 # save
 putil.label_figure(fig, figid)
@@ -408,13 +449,14 @@ segments = skeletons.merge(skeletons, 'inner',
 #%%
 # BOKEH: Plot LC10a skeleton and synapses
 # ======================================================
-xvar = 'x'
-yvar = 'z'
+xvar = 'z'
+yvar = 'y'
 plot_aotu_syn = False
 aotu_str = '_on_AOTU19-25' if plot_aotu_syn else ''
 
 # Apply initial colors
-set_segment_colors(segments, sorted_lc10a_ids, palette='Viridis')
+set_segment_colors(segments, sorted_lc10a_ids,
+                    palette=hue_palette)
 
 # Plot skeletons
 p = figure()
@@ -461,23 +503,33 @@ show(p)
 
 
 # %%
+# Get all TuTuA_2 neurons
+# ======================================================
+#src_type = 'AOTU042'
+#TuTuA2_neurons, TuTuA2_roi_counts = neu.fetch_neurons(NC(type=src_type,                                                          client=c))
+#TuTuA2_neurons.head()
+
 # Get synapse connections from TuTuA_2 to LC10a neurons
 # ======================================================
 min_confidence = 0.95
 syn_crit = SC(confidence=min_confidence)
+min_total_weight = 10
 
 #src = NC(type='TuTuA_2'
+#src_type = 'TuTuA_2'
 src_type = 'AOTU042'
-src = NC(type=src_type) #roi=f'LO({side})')
+#src_type = 'TuTuA_2'
+# -------------------
+src = NC(type=[src_type]) #'TuTuA_2', 'AOTU042']) #roi=f'LO({side})')
 dst = NC(type='LC10a')
 
 # bodyId_pre are the TuTuA_2 neurons
 # bodyId_post are the LC10a neurons
 tutu_lc10a_syn = neu.fetch_synapse_connections(src, dst, client=c,
-                                               nt='max',
-                                               min_total_weight=10,
-                                               synapse_criteria=syn_crit)
-# %%
+                    nt='max',
+                    min_total_weight=min_total_weight,
+                    synapse_criteria=syn_crit)
+# %
 # Get TuTu-LC10a synapses on current side
 tutu_lc10a_syn_side = tutu_lc10a_syn[tutu_lc10a_syn['bodyId_post'].isin(lc10a_ids)].copy().reset_index(drop=True)
 print(f"Number of synapses to LC10a-{side} neurons: {tutu_lc10a_syn_side['bodyId_post'].nunique()}")
@@ -489,13 +541,41 @@ tutu_lc10a_syn_side.head()
 # Add synapse counts per LC10a neuron
 tutu_lc10a_syn_side['syn_count'] = tutu_lc10a_syn_side.groupby(['bodyId_post'])['bodyId_post'].transform('count')
 
+lc10a_syn['syn_count'] = lc10a_syn.groupby(['bodyId'])['bodyId'].transform('count')
+
 #%%
-# Plot synapse locations from TuTuA_2 to onto LC10a (And AOTU019/25 as reference)
+# Check source NT:
 # -------------------------------------------------------------
-xvar = 'x'
+xvar = 'y'
 yvar = 'z'
-#z = 'z'
 pre_post = 'pre'
+xvar_pre_post = f'{xvar}_{pre_post}'
+yvar_pre_post = f'{yvar}_{pre_post}'
+
+# Color by nt
+fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+# Change size of points to match confidence_pre
+sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
+                x=xvar_pre_post, y=yvar_pre_post,
+                hue='nt', palette='colorblind', legend=1,
+                #size=f'confidence_{pre_post}', 
+                #sizes = (0.95, 1),
+                edgecolor='none', 
+                alpha=0.5)
+sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1),
+                frameon=False)
+ax.set_title(f'{src_type}->LC10a ({side}), {pre_post}-synaptic',
+             loc='left', fontsize=12)
+
+
+#%%
+# 1. Plot TuTuA_2 synapses on LC10a (And AOTU019/25 as reference)
+# -------------------------------------------------------------
+xvar = 'z'
+yvar = 'y'
+pre_post = 'pre'
+hue_palette = 'viridis'
+weight_palette = 'magma'
 
 markersize= 50
 alpha = 0.5
@@ -509,26 +589,26 @@ huevar = f'{sort_by}_order' #= f'{z}_{pre_post}'
 fig, axn = plt.subplots(1, 2, figsize=(10, 5), 
                     sharex=True, sharey=True)
 ax=axn[0]
-# plot L1a0 neurons
+# Plot L1a0 neurons
 sns.scatterplot(data=lc10a_syn, ax=ax,
                 x=xvar, y=yvar,
-                #x=f'{x}', y=f'{y}', 
                 color='lightgray', s=markersize, alpha=alpha)
 # Plot TuTuA synapses
 sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
-                x=xvar_pre_post, y=yvar_pre_post, hue=huevar,
-                palette='viridis', legend=0, 
+                x=xvar_pre_post, y=yvar_pre_post, 
+                hue=huevar,
+                palette=hue_palette, legend=0, 
                 s=markersize, alpha=alpha)
 title = f'{src_type}_{pre_post}, ({side}), hue=sorted LC10a {sort_by}-pos in LO'
 ax.set_title(title, loc='left', fontsize=12) 
 
+# Plot AOTU019 and 25 
 ax=axn[1]
-# plot L1a0 neurons
+# LC10a terminals
 sns.scatterplot(data=lc10a_syn, ax=ax,
                 x=xvar, y=yvar,
-                #x=f'{x}', y=f'{y}', 
                 color='lightgray', s=5, alpha=0.5)
-# Plot AOTU019 and 25 
+# AOTU019 and 25 terminals
 sns.scatterplot(data=lc10a_aotu19_syn, ax=ax,
                 x=xvar_pre_post, y=yvar_pre_post, 
                 color='red', s=markersize/2, alpha=alpha, label='AOTU019')
@@ -537,14 +617,7 @@ sns.scatterplot(data=lc10a_aotu25_syn, ax=ax,
                 color='blue', s=markersize/2, alpha=alpha, label='AOTU025')
 ax.legend(frameon=False)
 ax.set_title('AOTU019 and 25', loc='left', fontsize=12)
-#ax.set_title(f'hue=syn_count by LC10a neuron', loc='left', fontsize=12)
-
-for ax in axn:
-    ax.set_aspect('equal')
-
 ax.invert_yaxis()
-if xvar == 'x':
-    ax.invert_xaxis()
 
 #  zoom into AOTU
 aotu_lims = lc10a_syn[lc10a_syn['roi'].str.contains('AOTU')]    
@@ -552,58 +625,64 @@ x_min, x_max = aotu_lims[xvar].min(), aotu_lims[xvar].max()
 y_min, y_max = aotu_lims[yvar].min(), aotu_lims[yvar].max()
 print(f'AOTU limits: {x_min}, {x_max}, {y_min}, {y_max}')
 
-
 for ax in axn:
     ax.set_aspect('equal')
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    #ax.set_ylim([12000, 20000])
     ax.set_aspect('equal')
     ax.invert_yaxis()
     if xvar == 'x':
         ax.invert_xaxis()
 
-
 # save
 putil.label_figure(fig, figid)
-figname = f'{side}_{src_type}_{pre_post}-synaptic_on_LC10a_huesort-{sort_by}-pos-in-LO_{xvar}-{yvar}'
+figname = f'{src_type}-{side}_{pre_post}-synaptic_huesort-{sort_by}_{xvar}-{yvar}'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
 # %
-# Color-code by LC10a synapse count
+# 2. Color-code by LC10a synapse count
 # -------------------------------------------------------------
-
-#
 fig, axn = plt.subplots(1, 2, figsize=(10, 5), sharex=True, sharey=True)
-# also plot L1a0 neurons
 ax=axn[0]
-# plot L1a0 neurons
+# LC10a terminals
 sns.scatterplot(data=lc10a_syn, ax=ax,
                 x=xvar, y=yvar,
-                #x=f'{x}', y=f'{y}', 
                 color='lightgray', s=5, alpha=0.5)
 # Plot TuTuA synapses
 sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
-                x=xvar_pre_post, y=yvar_pre_post, hue=huevar,
-                palette='viridis', legend=0, 
+                x=xvar_pre_post, y=yvar_pre_post, 
+                hue=huevar, palette=hue_palette, legend=0, 
                 s=markersize, alpha=alpha, 
                 edgecolor=edgecolor, lw=lw)
-#%
-fig.suptitle(f'{src_type}->LC10a ({side}), {pre_post}-synaptic')
-ax.set_title(f'hue=sort by LC10a {sort_by}-pos in LO', loc='left', fontsize=12)
+# Add colorbar on this axis for hue variable
+cbar_ax = fig.add_axes([0.45, 0.2, 0.01, 0.3])
+sm = cm.ScalarMappable(cmap=hue_palette)
+sm.set_clim(0, len(sorted_lc10a_ids_list) - 1)
+cbar = fig.colorbar(sm, cax=cbar_ax)
+cbar.set_label('LO position')
 
-# Plot by synapse
+fig.suptitle(f'{src_type}->LC10a ({side}), {pre_post}-synaptic')
+ax.set_title(f'hue=sorted LC10a {sort_by}-pos in LO', loc='left', fontsize=12)
+
+# 2. Plot by synapse
 ax=axn[1]
 sns.scatterplot(data=lc10a_syn, ax=ax,
                 x=xvar, y=yvar,
                 color='lightgray', s=5, alpha=0.5)
 sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
-                x=xvar_pre_post, y=yvar_pre_post, hue='syn_count',
-                palette='viridis', legend=0, 
-                s=markersize, alpha=alpha,
+                x=xvar_pre_post, y=yvar_pre_post, 
+                hue='syn_count', palette=weight_palette, 
+                legend=0, s=markersize, alpha=alpha,
                 edgecolor=edgecolor, lw=lw)
 ax.set_title(f'hue=syn_count by LC10a neuron', loc='left', fontsize=12)
+
+# Add colorbar for syn_count
+cbar_ax2 = fig.add_axes([0.91, 0.2, 0.01, 0.3])
+sm = cm.ScalarMappable(cmap=weight_palette)
+sm.set_clim(tutu_lc10a_syn_side['syn_count'].min(), tutu_lc10a_syn_side['syn_count'].max())
+cbar2 = fig.colorbar(sm, cax=cbar_ax2)
+cbar2.set_label('Synapse count')
 
 for ax in axn:
     ax.set_aspect('equal')
@@ -614,9 +693,11 @@ for ax in axn:
     ax.invert_yaxis()
     if xvar == 'x':
         ax.invert_xaxis()
+plt.subplots_adjust(wspace=0.5)
 
+# save
 putil.label_figure(fig, figid)
-figname = f'{side}_{src_type}_{pre_post}-synaptic_on_LC10a_ZOOM_hue-{sort_by}pos-and-syncount_{xvar}-{yvar}'
+figname = f'{src_type}-{side}_{pre_post}-synaptic_syn_count_huesort-{sort_by}_{xvar}-{yvar}'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
@@ -631,33 +712,10 @@ g.ax_joint.invert_yaxis()
 
 
 #%%
-xvar = 'x'
-yvar = 'z'
-xvar_pre_post = f'{xvar}_pre'
-yvar_pre_post = f'{yvar}_pre'
-
-# Color by nt
-fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
-                x=xvar_pre_post, y=yvar_pre_post,
-                hue='nt', palette='colorblind', legend=1,
-                sizes='confidence_pre', 
-                size_norm = (0.95, 1),
-                edgecolor='none', 
-                alpha=0.2)
-sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1),
-                frameon=False)
-
-#%%
-
-#%%
-
-#%%
 # PCA on synapses (TuTu->LC10a)
 # =======================================================
 # Filter to only synapses to sorted LC10a neurons
 #tutu_lc10a_syn_side = tutu_lc10a_syn[tutu_lc10a_syn['bodyId_post'].isin(sorted_lc10a_ids)].copy().reset_index(drop=True)
-
 
 #%%
 xvar = 'z'
@@ -673,7 +731,9 @@ lc10a_pca_scores = do_pca_on_synapses(tutu_lc10a_syn_side,
 #% # Add PCA scores to the original dataframe
 tutu_lc10a_syn_pca = pd.concat([tutu_lc10a_syn_side, lc10a_pca_scores], axis=1)
 
-fig = plot_pca_transformed(tutu_lc10a_syn_side, tutu_lc10a_syn_pca, 
+fig = plot_pca_transformed(tutu_lc10a_syn_side, 
+                            tutu_lc10a_syn_pca, 
+                           #hue_palette=hue_palette,
                            lc10a_cdict,
                            xvar=xvar_pre_post, 
                            yvar=yvar_pre_post, 
@@ -681,7 +741,7 @@ fig = plot_pca_transformed(tutu_lc10a_syn_side, tutu_lc10a_syn_pca,
                            marker='o', markersize=markersize)
  
 putil.label_figure(fig, figid)
-figname = f'{side}_check_pca_{src_type}-lc10a_{xvar_pre_post}-{yvar_pre_post}'
+figname = f'check_pca_{src_type}-{side}_{pre_post}_{xvar}-{yvar}'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
@@ -690,24 +750,23 @@ print(figname)
 n_pca_bins = 10
 tutu_lc10a_syn_pca_binned = bin_pca_scores(tutu_lc10a_syn_pca,
                                 n_bins=n_pca_bins)
-#%
-#%
-#bin_cmap = 'viridis_r'
+# Plot joint and marginal distributions
 fig = plot_joint_pca_scores(tutu_lc10a_syn_pca_binned, tutu_lc10a_syn_pca, 
-                            lc10a_cdict, #bin_cmap=bin_cmap,
+                            lc10a_cdict, 
+                            bin_cmap='viridis_r',
                             markersize=10, marker='o',
                             hue_var='bodyId_post', 
-                            marginal_marker='o', marginal_markersize=20)
+                            marginal_marker='o', marginal_markersize=20,
+                            figsize=(4.5,4))
 putil.label_figure(fig, figid)
-figname = f'{side}_{src_type}_pca_scores_binned'
+figname = f'{src_type}-{side}_{pre_post}_pca_scores_binned'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
 #%%
+# QC: Check each bin
 # Plot the synapses for each PC1 bin, x-y view
-# 
 pc_bins = tutu_lc10a_syn_pca['PC1_bin_label'].unique()
-#x = tutu_lc10a_syn_pca[tutu_lc10a_syn_pca['PC1_bin_label']==pc_bins[0]]
 
 lc10a_syn_zoom = lc10a_syn[lc10a_syn['roi'].str.contains('AOTU')]
 nr = 3
@@ -754,56 +813,55 @@ plt.subplots_adjust(hspace=0.8)
 
 
 fig.suptitle(f'{src_type}->LC10a synapses, PC1 bins',
-             fontsize=12)
+             fontsize=8)
 
 putil.label_figure(fig, figid)
-figname = f'{side}_{src_type}_synapses_PC1_bins_{xvar}-{yvar}'
+figname = f'{src_type}-{side}_{pre_post}_PC1_bins_{xvar}-{yvar}'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
 
 #%%
 min_confidence = 0.95
-plotd = tutu_lc10a_syn_pca[(tutu_lc10a_syn_pca['confidence_pre']>=min_confidence)
+tutu_syn_confident = tutu_lc10a_syn_pca[(tutu_lc10a_syn_pca['confidence_pre']>=min_confidence)
                             & (tutu_lc10a_syn_pca['confidence_post']>=min_confidence)]
-plotd['PC1_bin_numeric'] = pd.to_numeric(plotd['PC1_bin_label'])
+tutu_syn_confident['PC1_bin_numeric'] = pd.to_numeric(tutu_syn_confident['PC1_bin_label'])
 
 fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-sns.countplot(data=plotd, ax=ax,
+sns.countplot(data=tutu_syn_confident, ax=ax,
                 x='PC1_bin_label')
-                #hue='bodyId_post',
-                #palette=lc10a_cdict, legend=0)
 ax.set_xlabel('PC1')
+
 #%%
 fig, axn = plt.subplots(2, 2, figsize=(10, 10))
 fig.suptitle(f'{src_type}({side})-{pre_post}, x={xvar}, y={yvar}')
 ax=axn[0, 0]
 # Plot PC1 vs. PC2, color by LO position
-sns.scatterplot(data=plotd, ax=ax,
+sns.scatterplot(data=tutu_syn_confident, ax=ax,
                 x='PC1', y='PC2',
                 hue='bodyId_post', palette=lc10a_cdict,
                 alpha=0.5, legend=0, s=50)
 
 ax=axn[0, 1]
 # Plot syn_count (per LC10a neuron) vs. position along PC1
-sns.scatterplot(data=plotd, ax=ax,
+sns.scatterplot(data=tutu_syn_confident, ax=ax,
                 x='PC1', y='syn_count',
                 hue='PC1_bin_label', #bodyId_post',
                 alpha=0.5,
                 legend=0)
-sns.regplot(data=plotd, ax=ax,
+sns.regplot(data=tutu_syn_confident, ax=ax,
                 x='PC1', y='syn_count',
                 scatter=False)
 ax.set_xlabel('PC1')
 
 ax=axn[1, 0]
 # Plot counts of synapses along PC1
-sns.countplot(data=plotd, ax=ax,
+sns.countplot(data=tutu_syn_confident, ax=ax,
                 x='PC1_bin_numeric')
 
 ax=axn[1, 1]
 # Plot syn_count (per PC1 bin) vs. PC1 bin label
-sns.pointplot(data=plotd, ax=ax,
+sns.pointplot(data=tutu_syn_confident, ax=ax,
                 x='PC1_bin_numeric', y='syn_count',
                 alpha=0.5,
                 legend=0)
@@ -815,7 +873,7 @@ for ax in axn[1, :]:
 fig.suptitle(f'TuTuA2({side})-{pre_post}, x={xvar}, y={yvar}',
              fontsize=12)
 putil.label_figure(fig, figid)
-figname = f'{side}_{src_type}_PC1_bins_counts_vs_syncounts_{xvar}-{yvar}'
+figname = f'{src_type}-{side}_{pre_post}_PC1_bins_counts_vs_syncounts_{xvar}-{yvar}'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
@@ -824,23 +882,46 @@ print(figname)
 
 # Bin y-order
 n_bins = 10
-bins = np.linspace(plotd['y_order'].min(), plotd['y_order'].max(), n_bins)
-plotd['y_order_bin'] = pd.cut(plotd['y_order'], bins)
-plotd['y_order_bin_label'] = plotd['y_order_bin'].apply(lambda x: x.mid)
+bins = np.linspace(tutu_syn_confident[f'{sort_by}_order'].min(), tutu_syn_confident[f'{sort_by}_order'].max(), n_bins)
+tutu_syn_confident[f'{sort_by}_order_bin'] = pd.cut(tutu_syn_confident[f'{sort_by}_order'], bins)
+tutu_syn_confident[f'{sort_by}_order_bin_label'] = tutu_syn_confident[f'{sort_by}_order_bin'].apply(lambda x: x.mid)
 
 # Plot syn_count (per y-order bin) vs. y-order bin label
-fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-sns.countplot(data=plotd, ax=ax,
-                x='y_order_bin_label',
-                hue='y_order_bin_label',
-                palette='viridis', legend=0,
+fig, axn = plt.subplots(1, 2, figsize=(6, 4))
+ax=axn[0]
+lc10a_syn_zoom = lc10a_syn[lc10a_syn['roi'].str.contains('AOTU')]
+sns.scatterplot(data=lc10a_syn_zoom, ax=ax,
+                x=xvar, y=yvar,
+                color='lightgray', s=5, alpha=0.5)
+sns.scatterplot(data=tutu_syn_confident, ax=ax,
+                x=xvar_pre_post, y=yvar_pre_post,
+                hue='bodyId_post', palette=lc10a_cdict, legend=0,
+                s=5, edgecolor='none')
+ax.invert_yaxis()
+ax.set_aspect('equal')
+ax.set_xticklabels([])
+ax.set_yticklabels([])
+putil.remove_spines(ax, axes=['right', 'top', 'bottom', 'left'])
+
+ax=axn[1]
+sns.countplot(data=tutu_syn_confident, ax=ax,
+                x=f'{sort_by}_order_bin_label',
+                hue=f'{sort_by}_order_bin_label',
+                palette='viridis_r', legend=0,
                 alpha=0.5)
 # Annotate by how many values per bin
-for i, (v, tmp) in enumerate(plotd.groupby('y_order_bin_label')):
+for i, (v, tmp) in enumerate(tutu_syn_confident.groupby(f'{sort_by}_order_bin_label')):
     ax.text(i, 10, f'{tmp["bodyId_post"].nunique()}',
             ha='center', va='bottom', fontsize=8)
 # Format x ticks
 ax.set_xticklabels([f'{int(round(float(x)))}' for x in ax.get_xticks()])
+ax.set_box_aspect(1)
+sns.despine(ax=ax, offset=4, trim=True)
+
+plt.subplots_adjust(wspace=0.5)
+
+# save
+putil.label_figure(fig, figid)
 
 #%%
 
@@ -852,6 +933,27 @@ ax.set_xticklabels([f'{int(round(float(x)))}' for x in ax.get_xticks()])
 #%%
 # Reslice 2D to match 2p imaging?
 
+def slice_coordinates(curr_lc10a_syn, zvar='y', z_steps=5):
+
+    zmin, zmax = curr_lc10a_syn[f'{zvar}'].min(), curr_lc10a_syn[f'{zvar}'].max()
+    #print( f'z range: {zmin} to {zmax}')
+    z_depth = zmax - zmin
+    slice_list = []
+    for i in range(z_steps):
+        curr_z_slice = [zmin + i*z_depth/z_steps, zmin + (i+1)*z_depth/z_steps]
+        #print(curr_z_slice)
+        #curr_lc10a_syn.loc[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1]), f'{yvar}_slice'] = i
+        #curr_lc10a_syn.loc[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1]), f'{yvar}_range'] = (curr_z_slice[0], curr_z_slice[1])
+        curr_slice = curr_lc10a_syn[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1])].copy()
+        curr_slice['z_slice'] = i
+        curr_slice['z_range_start'] = curr_z_slice[0]
+        curr_slice['z_range_end'] = curr_z_slice[1]
+        slice_list.append(curr_slice)     
+
+    curr_lc10a_syn = pd.concat(slice_list)
+
+    return curr_lc10a_syn
+
 # %%
 #tutu_lc10a_syn_slice
 
@@ -860,45 +962,50 @@ ax.set_xticklabels([f'{int(round(float(x)))}' for x in ax.get_xticks()])
 xvar = 'x'
 yvar = 'z'
 zvar = 'y'
+curr_side = side
 
-markersize = 10
-alpha = 1
-curr_side = side #'R'
-
-# Split AOTU into z slices:
-curr_lc10a_syn = lc10a_syn[(lc10a_syn['roi']==f'AOTU({curr_side})')
+lc10a_syn_conf = lc10a_syn[(lc10a_syn['roi']==f'AOTU({curr_side})')
                             & (lc10a_syn['confidence']>=min_confidence)]
-zmin, zmax = curr_lc10a_syn[f'{zvar}'].min(), curr_lc10a_syn[f'{zvar}'].max()
-print( f'z range: {zmin} to {zmax}')
-z_depth = zmax - zmin
+tutu_lc10a_syn_conf = tutu_lc10a_syn_side[(tutu_lc10a_syn_side['roi_pre'].str.contains(curr_side))
+                            & (tutu_lc10a_syn_side['confidence_pre']>=min_confidence)]
 
 z_steps = 5
+zvar = 'y'
+
+lc10a_syn_conf = slice_coordinates(lc10a_syn_conf, 
+                                    zvar=zvar, z_steps=z_steps)
+tutu_lc10a_syn_conf = slice_coordinates(tutu_lc10a_syn_conf, 
+                                    zvar=f'{zvar}_pre', z_steps=z_steps)
+
+# Split AOTU into z slices:
+#%%
+markersize = 10
+alpha = 1
 
 fig, axn = plt.subplots(1, z_steps, figsize=(4*z_steps, 6),
                         sharex=True, sharey=True)
 ri = 0
-for i in range(z_steps):
-    curr_z_slice = [zmin + i*z_depth/z_steps, zmin + (i+1)*z_depth/z_steps]
-    print(curr_z_slice)
-    lc10a_syn_slice = curr_lc10a_syn[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1])]
+lc10a_syn_xlim = lc10a_syn_conf[f'{xvar}'].min(), lc10a_syn_conf[f'{xvar}'].max()
+lc10a_syn_ylim = lc10a_syn_conf[f'{yvar}'].min(), lc10a_syn_conf[f'{yvar}'].max()
+
+for i, (v, lc_slice_) in enumerate(lc10a_syn_conf.groupby('z_slice')):
+    #curr_z_slice = [zmin + i*z_depth/z_steps, zmin + (i+1)*z_depth/z_steps]
     ax=axn[i]
     # add lc10a 
-    sns.scatterplot(data=curr_lc10a_syn, ax=ax,
+    sns.scatterplot(data=lc10a_syn_conf, ax=ax,
                     x=f'{xvar}', y=f'{yvar}',
                     color='lightgray',
                     s=markersize, edgecolor='none', alpha=alpha)
-
-    sns.scatterplot(data=lc10a_syn_slice, ax=ax,
+    # overlay color-coded by LO position
+    sns.scatterplot(data=lc_slice_, ax=ax,
                     x=f'{xvar}', y=f'{yvar}',
                     hue='bodyId', palette=lc10a_cdict, legend=0,
                     s=markersize, edgecolor='none', alpha=alpha)
-    
+    curr_z_slice = (lc_slice_['z_range_start'].iloc[0], lc_slice_['z_range_end'].iloc[0])
     ax.set_title(f'{zvar} slice: {curr_z_slice[0]} to {curr_z_slice[1]}')
-# zoom in
-lc10a_syn_slice_xlim = curr_lc10a_syn[f'{xvar}'].min(), curr_lc10a_syn[f'{xvar}'].max()
-lc10a_syn_slice_ylim = curr_lc10a_syn[f'{yvar}'].min(), curr_lc10a_syn[f'{yvar}'].max()
-ax.set_xlim(lc10a_syn_slice_xlim)
-ax.set_ylim(lc10a_syn_slice_ylim)
+    # zoom in
+    ax.set_xlim(lc10a_syn_xlim)
+    ax.set_ylim(lc10a_syn_ylim)
 
 for ax in axn:
     ax.set_aspect('equal')
@@ -913,20 +1020,20 @@ cbar.set_label('LO position (sorted order)')
 
 #%%
 
-markersize = 10
+lc_markersize = 10
+tutu_markersize = 50
+alpha = 0.5
 
-curr_tutu_lc10a_syn = tutu_lc10a_syn_side[(tutu_lc10a_syn_side['roi_pre'].str.contains(curr_side))
-                            & (tutu_lc10a_syn_side['confidence_pre']>=min_confidence)]
+lc10a_syn_zoom = lc10a_syn_conf[lc10a_syn_conf['roi'].str.contains('AOTU')]
+lc10a_syn_zoom_xlim = lc10a_syn_zoom[f'{xvar}'].min(), lc10a_syn_zoom[f'{xvar}'].max()
+lc10a_syn_zoom_ylim = lc10a_syn_zoom[f'{yvar}'].min(), lc10a_syn_zoom[f'{yvar}'].max()
+
 
 fig, axn = plt.subplots(2, z_steps, figsize=(4*z_steps, 6),
                         sharex=True, sharey=True)
-for i in range(z_steps):
-    # Get slice
-    curr_z_slice = [zmin + i*z_depth/z_steps, zmin + (i+1)*z_depth/z_steps]
-    print(curr_z_slice)
-    lc10a_syn_slice = curr_lc10a_syn[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1])]
-    curr_lc10a_syn.loc[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1]), 'z_slice'] = i
 
+for i, (v, lc_slice_) in enumerate(lc10a_syn_conf.groupby('z_slice')):
+    curr_z_slice = (lc_slice_['z_range_start'].iloc[0], lc_slice_['z_range_end'].iloc[0])
     ax=axn[0, i]
     # all lc10a 
     if i==0:
@@ -935,28 +1042,29 @@ for i in range(z_steps):
     else:
         ax.set_title(f'{zvar} slice: {curr_z_slice[0]:0.1f} to {curr_z_slice[1]:0.1f}', loc='left')
 
-    sns.scatterplot(data=curr_lc10a_syn, ax=ax,
+    sns.scatterplot(data=lc10a_syn_zoom, ax=ax,
                     x=f'{xvar}', y=f'{yvar}',
                     color='lightgray',
-                    s=markersize, edgecolor='none', alpha=alpha)
+                    s=lc_markersize, edgecolor='none', alpha=alpha)
     # color current slice by LO bodyID
-    sns.scatterplot(data=lc10a_syn_slice, ax=ax,
+    sns.scatterplot(data=lc_slice_, ax=ax,
                     x=f'{xvar}', y=f'{yvar}',
                     hue='bodyId', palette=lc10a_cdict, legend=0,
-                    s=markersize, edgecolor='none', alpha=alpha)
+                    s=lc_markersize, edgecolor='none', alpha=alpha)
     
     if i == z_steps-1:
         # Add colorbar shared only for TOP row of subplots:
-        cbar_ax = fig.add_axes([0.91, 0.6, 0.01, 0.3])
+        cbar_ax = fig.add_axes([0.91, 0.6, 0.01, 0.25])
         sm = cm.ScalarMappable(cmap=lc10a_listed_cmap)
         sm.set_clim(0, len(sorted_lc10a_ids_list) - 1)
         cbar = fig.colorbar(sm, cax=cbar_ax)
-        cbar.set_label('LO position (sorted order)')
+        cbar.set_label('LO position')
 
 
     ax=axn[1, i]
-    tutu_lc10a_syn_slice = curr_tutu_lc10a_syn[curr_tutu_lc10a_syn[f'{zvar}_pre'].between(curr_z_slice[0], curr_z_slice[1])]
-    curr_tutu_lc10a_syn.loc[curr_tutu_lc10a_syn[f'{zvar}_pre'].between(curr_z_slice[0], curr_z_slice[1]), 'z_slice'] = i
+    #tutu_lc10a_syn_slice = curr_tutu_lc10a_syn[curr_tutu_lc10a_syn[f'{zvar}_pre'].between(curr_z_slice[0], curr_z_slice[1])]
+    #curr_tutu_lc10a_syn.loc[curr_tutu_lc10a_syn[f'{zvar}_pre'].between(curr_z_slice[0], curr_z_slice[1]), 'z_slice'] = i
+    tutu_slice_ = tutu_lc10a_syn_conf[tutu_lc10a_syn_conf['z_slice']==i]
     # all lc10a 
     if i==0:
         curr_title = f'{src_type} synapses\n{zvar} slice: {curr_z_slice[0]:0.1f} to {curr_z_slice[1]:0.1f}'
@@ -964,24 +1072,25 @@ for i in range(z_steps):
     else:
         ax.set_title(f'{zvar} slice: {curr_z_slice[0]:0.1f} to {curr_z_slice[1]:0.1f}', loc='left')
 
-    sns.scatterplot(data=curr_lc10a_syn, ax=ax,
+    sns.scatterplot(data=lc10a_syn_conf, ax=ax,
                     x=f'{xvar}', y=f'{yvar}',
                     color='lightgray',
-                    s=markersize, edgecolor='none', alpha=alpha)
+                    s=lc_markersize, edgecolor='none', alpha=alpha)
     # current TuTuA synapses
-    sns.scatterplot(data=tutu_lc10a_syn_slice, ax=ax,
+    sns.scatterplot(data=tutu_slice_, ax=ax,
                     x=f'{xvar}_pre', y=f'{yvar}_pre',
-                    hue='syn_count', palette='viridis', legend=0,
-                    s=50, edgecolor='none', alpha=alpha)
+                    hue='syn_count', 
+                    palette=weight_palette, legend=0,
+                    s=tutu_markersize, edgecolor='none', alpha=alpha)
 
     if i == z_steps-1:
         # Add colorbar shared only for BOTTOM row of subplots:
-        cbar_ax = fig.add_axes([0.91, 0.1, 0.01, 0.3])
-        sm = cm.ScalarMappable(cmap='viridis')
-        sm.set_clim(vmin=curr_tutu_lc10a_syn['syn_count'].min(), 
-                    vmax=curr_tutu_lc10a_syn['syn_count'].max())
+        cbar_ax = fig.add_axes([0.91, 0.2, 0.01, 0.25])
+        sm = cm.ScalarMappable(cmap=weight_palette)
+        sm.set_clim(vmin=0, #tutu_lc10a_syn_conf['syn_count'].min(), 
+                    vmax=tutu_lc10a_syn_conf['syn_count'].max())
         cbar = fig.colorbar(sm, cax=cbar_ax)
-        cbar.set_label('Synapse Count')
+        cbar.set_label('Per Neuron Synapse Count')
 
 # axes
 for ax in axn.flat:
@@ -989,7 +1098,7 @@ for ax in axn.flat:
 ax.invert_yaxis()
 
 putil.label_figure(fig, figid)
-figname = f'{side}_{src_type}_synapses_by_zslice'
+figname = f'{src_type}-{side}_{pre_post}_by_{xvar}-{yvar}-slice-{zvar}'
 putil.save_fig(figname, fig, figid, output_dir)
 print(figname)
 
@@ -997,8 +1106,8 @@ print(figname)
 
 # Look at 1 slice
 z_slice = 1
-lc10a_slice = curr_lc10a_syn[curr_lc10a_syn['z_slice']==z_slice].reset_index(drop=True)
-tutu_slice = curr_tutu_lc10a_syn[curr_tutu_lc10a_syn['z_slice']==z_slice].reset_index(drop=True)
+lc10a_slice = lc10a_syn_conf[lc10a_syn_conf['z_slice']==z_slice].reset_index(drop=True)
+tutu_slice = tutu_lc10a_syn_conf[tutu_lc10a_syn_conf['z_slice']==z_slice].reset_index(drop=True)
 
 # Do pca on this slice
 curr_pca = do_pca_on_synapses(tutu_slice, xvar=f'{xvar}_pre', yvar=f'{yvar}_pre')   
@@ -1020,48 +1129,65 @@ fig.suptitle(f'{zvar} slice: {z_slice}')
 #%%
 # Total N synapses per z-slice
 # -------------------------------------
-z_steps = 10
-for i in range(z_steps):
-    curr_z_slice = [zmin + i*z_depth/z_steps, zmin + (i+1)*z_depth/z_steps]
-    print(curr_z_slice)
-    curr_lc10a_syn.loc[curr_lc10a_syn[f'{zvar}'].between(curr_z_slice[0], curr_z_slice[1]), 'z_slice'] = i
-    curr_tutu_lc10a_syn.loc[curr_tutu_lc10a_syn[f'{zvar}_pre'].between(curr_z_slice[0], curr_z_slice[1]), 'z_slice'] = i
-#%
-fig, axn = plt.subplots(1, 2, figsize=(8, 4),
+fig, axn = plt.subplots(1, 3, figsize=(9, 3),
                         sharex=True, sharey=False) 
-# all lc10a 
+# all lc10a
 ax=axn[0]
-sns.countplot(data=curr_lc10a_syn, ax=ax,
+sns.countplot(data=lc10a_syn_zoom, ax=ax,
                 x='z_slice',
                 hue='z_slice',
-                palette='viridis', legend=0,
+                palette='viridis_r', legend=0,
                 alpha=0.5)
 ax.set_title('Total LC10a synapses by slice', loc='left',
              fontsize=10)
 ax=axn[1]
-sns.countplot(data=curr_tutu_lc10a_syn, ax=ax,
+sns.countplot(data=tutu_lc10a_syn_conf, ax=ax,
                 x='z_slice',
                 hue='z_slice',
-                palette='viridis', legend=0,
+                palette='viridis_r', legend=0,
                 alpha=0.5)
 ax.set_title('Total TuTu synapses by slice', loc='left',
              fontsize=10)
+
+# Calculate ratio of TuTu synapses to LC10a synapses by slice
+ratios = []
+for z_, lc_z in lc10a_syn_zoom.groupby('z_slice'):
+    tu_z = tutu_lc10a_syn_conf[tutu_lc10a_syn_conf['z_slice']==z_]
+    #ratio = tu_z['syn_count'].sum() / lc_z['syn_count'].sum()
+    tu_summed_per_neuron = tu_z.groupby('bodyId_post')['syn_count'].unique().sum()
+    lc_summed_per_neuron = lc_z.groupby('bodyId')['syn_count'].unique().sum()
+    ratio_total = tu_z['bodyId_post'].count() / lc_z['bodyId'].count()
+    ratios_tmp = {'ratio_per_neuron': tu_summed_per_neuron / lc_summed_per_neuron, 
+                'ratio_total': ratio_total,
+                'z_slice': z_}
+    ratios_ = pd.DataFrame(ratios_tmp)
+    ratios.append(ratios_)
+ratio_df = pd.concat(ratios, ignore_index=True)
+
+# plot
+ax = axn[2]
+sns.pointplot(data=ratio_df, ax=ax,
+                x='z_slice', y='ratio_total',
+                alpha=0.5, 
+                errorbar='se')
+
 for ax in axn:
     ax.set_box_aspect(1)
 
-#%%
-# Look at 1 slice
-z_slice = 1
-lc10a_slice = curr_lc10a_syn[curr_lc10a_syn['z_slice']==z_slice]
+plt.subplots_adjust(wspace=0.5)
 
+putil.label_figure(fig, figid)
+figname = f'{src_type}-{side}_ratio_total'
+putil.save_fig(figname, fig, figid, output_dir)
+print(figname)
 
 #%%
 # N synapses per neuron per z-slice
 # -------------------------------------
-lc10a_syn_counts = curr_lc10a_syn.groupby('z_slice')['bodyId'].value_counts().reset_index()
-tutu_syn_counts = curr_tutu_lc10a_syn.groupby('z_slice')['bodyId_post'].value_counts().reset_index()
+lc10a_syn_counts = lc10a_syn_zoom.groupby('z_slice')['bodyId'].value_counts().reset_index()
+tutu_syn_counts = tutu_lc10a_syn_conf.groupby('z_slice')['bodyId_post'].value_counts().reset_index()
 
-fig, axn = plt.subplots(1, 2, figsize=(8, 4),
+fig, axn = plt.subplots(1, 3, figsize=(9, 3),
                         sharex=True, sharey=False)
 ax=axn[0]
 sns.pointplot(data=lc10a_syn_counts, ax=ax,
@@ -1074,8 +1200,7 @@ sns.pointplot(data=tutu_syn_counts, ax=ax,
                 alpha=0.5)
 ax.set_title('TuTu synapses per neuron by slice', fontsize=10)
 
-
-#%%
+#%
 # Calculate ratio
 r_list = []
 for z_, lc_z in lc10a_syn_counts.groupby('z_slice'):
@@ -1098,47 +1223,27 @@ for z_, lc_z in lc10a_syn_counts.groupby('z_slice'):
 ratios = pd.concat(r_list, ignore_index=True)
 
 #%
-fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+ax = axn[2]
 sns.pointplot(data=ratios, ax=ax,
                 x='z_slice', y='ratio',
                 alpha=0.5, 
                 errorbar='se')
 ax.set_xlabel('z_slice')
 ax.set_ylabel('ratio')
-ax.set_title('Ratio of TuTu synapses to LC10a synapses by slice')
+ax.set_title(f'{src_type}:LC10a per neuron', fontsize=10)
 
+plt.subplots_adjust(wspace=0.5)
+for ax in axn:
+    ax.set_box_aspect(1)
 
+# save
+putil.label_figure(fig, figid)
+figname = f'{src_type}-{side}_ratio_per_neuron'
+putil.save_fig(figname, fig, figid, output_dir)
+print(figname)
 #%%
-# Do the binning by zvar -- count
-zvar = 'y'
-# import mplt normalize
 import matplotlib.colors as mcolors
-# add bin column with the same bin slices (vectorized)
-bins = np.linspace(zmin, zmax, z_steps + 1)
-bin_midpoints = (bins[:-1] + bins[1:]) / 2
-tutu_lc10a_syn_side['zvar_bin_label'] = pd.cut(
-    tutu_lc10a_syn_side[f'{zvar}_pre'],
-    bins=bins,
-    labels=bin_midpoints,
-    include_lowest=True
-).astype(float)
-
-#%
-# Group by zvar bin, and count synapses
-count_col = 'bodyId_post' # doesnt matter which column we count
-tutu_lc10a_syn_side_binned = tutu_lc10a_syn_side.groupby(['zvar_bin_label'])[count_col].count().reset_index()       
-
-# Count N synapses in each of these bins:
-fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-sns.countplot(data=tutu_lc10a_syn_side, ax=ax,
-                x='zvar_bin_label',
-                )
-ax.set_title(f'Total TuTu synapses by {zvar} slice', fontsize=10)
-
-#%%
- 
-
-# Check if the syanpses actually match the bin
+ # Check if the syanpses actually match the bin
 n_bins = tutu_lc10a_syn_side['zvar_bin_label'].nunique()
 fig, axn = plt.subplots(n_bins, 1, 
                     figsize=(5, 1*n_bins), 
@@ -1245,9 +1350,9 @@ print(figname)
 tutu_lc10a_syn_slice_pca_binned = bin_pca_scores(tutu_lc10a_syn_slice_pca)
 #%
 #%
-bin_cmap = 'viridis_r'
 fig = plot_joint_pca_scores(tutu_lc10a_syn_slice_pca_binned, tutu_lc10a_syn_slice_pca, 
-                            lc10a_cdict, bin_cmap=bin_cmap,
+                            lc10a_cdict, 
+                            bin_cmap=hue_palette,
                             markersize=20, marker='o', alpha=0.5,
                             hue_var='bodyId_post', 
                             marginal_marker='o', marginal_markersize=20)
