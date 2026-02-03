@@ -313,7 +313,7 @@ aotu25_neurons, aotu25_roi_counts = neu.fetch_neurons(NC(type='AOTU025',
                                                          client=c))
 #%%
 # Select 1 side to look at
-side = 'L' #'R'
+side = 'R' #'R'
 
 if side is not None:
     aotu19_ids = aotu19_neurons[aotu19_neurons['instance']==f'AOTU019_{side}']['bodyId'].unique()
@@ -517,7 +517,8 @@ min_total_weight = 10
 
 #src = NC(type='TuTuA_2'
 #src_type = 'TuTuA_2'
-src_type = 'AOTU042'
+#src_type = 'AOTU042'
+src_type = 'LT52'
 #src_type = 'TuTuA_2'
 # -------------------
 src = NC(type=[src_type]) #'TuTuA_2', 'AOTU042']) #roi=f'LO({side})')
@@ -554,8 +555,10 @@ yvar_pre_post = f'{yvar}_{pre_post}'
 
 # Color by nt
 fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+check_df = tutu_lc10a_syn_side[tutu_lc10a_syn_side['roi_post']==f'AOTU({side})'].copy()
 # Change size of points to match confidence_pre
-sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
+sns.scatterplot(data=check_df, 
+                ax=ax,
                 x=xvar_pre_post, y=yvar_pre_post,
                 hue='nt', palette='colorblind', legend=1,
                 #size=f'confidence_{pre_post}', 
@@ -567,12 +570,20 @@ sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1),
 ax.set_title(f'{src_type}->LC10a ({side}), {pre_post}-synaptic',
              loc='left', fontsize=12)
 
+print(check_df.groupby('nt')['syn_count'].sum())
+
+putil.label_figure(fig, figid)
+figname = f'{src_type}-{side}_{pre_post}-synaptic_NT'
+putil.save_fig(figname, fig, figid, output_dir)
+print(figname)
 
 #%%
 # 1. Plot TuTuA_2 synapses on LC10a (And AOTU019/25 as reference)
 # -------------------------------------------------------------
-xvar = 'z'
-yvar = 'y'
+#xvar = 'z'
+#yvar = 'y'
+xvar = 'x'
+yvar = 'z'
 pre_post = 'pre'
 hue_palette = 'viridis'
 weight_palette = 'magma'
@@ -643,6 +654,7 @@ print(figname)
 # %
 # 2. Color-code by LC10a synapse count
 # -------------------------------------------------------------
+markersize = 20
 fig, axn = plt.subplots(1, 2, figsize=(10, 5), sharex=True, sharey=True)
 ax=axn[0]
 # LC10a terminals
@@ -673,7 +685,8 @@ sns.scatterplot(data=lc10a_syn, ax=ax,
 sns.scatterplot(data=tutu_lc10a_syn_side, ax=ax,
                 x=xvar_pre_post, y=yvar_pre_post, 
                 hue='syn_count', palette=weight_palette, 
-                legend=0, s=markersize, alpha=alpha,
+                hue_norm = (0, 40),
+                legend=0, s=markersize, alpha=0.5,
                 edgecolor=edgecolor, lw=lw)
 ax.set_title(f'hue=syn_count by LC10a neuron', loc='left', fontsize=12)
 
